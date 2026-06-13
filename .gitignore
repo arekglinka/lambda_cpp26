@@ -1,0 +1,38 @@
+# Build artifacts
+build/
+CMakeUserPresets.json
+CMakeCache.txt
+compile_commands.json
+CTestTestfile.cmake
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+
+# Conan
+.conan2/
+!recipes/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clangd/
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Container
+*.tar
+*.tar.gz
+
+# Secrets
+.env
+.env.local

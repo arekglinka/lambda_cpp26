@@ -1,0 +1,12 @@
+.git
+.gitignore
+.conan2
+build/
+docs/
+events/
+Makefile
+*.md
+LICENSE
+.podmanignore
+.vscode/
+.idea/

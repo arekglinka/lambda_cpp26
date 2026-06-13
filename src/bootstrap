@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# bootstrap — AWS Lambda entrypoint for the lambda_cpp26 handler.
+#
+# When deployed, Lambda invokes this script. The Runtime Interface Emulator
+# (RIE) in the provided.al2023 base image handles the Lambda Runtime API.
+#
+# When running locally with `podman run -p 9000:8080`, RIE starts the Runtime
+# API server and invokes this script for each invocation.
+
+set -euo pipefail
+
+HANDLER_BIN="/opt/lambda/bin/lambda_handler"
+
+if [[ ! -x "${HANDLER_BIN}" ]]; then
+    echo "[bootstrap] FATAL: handler binary not found at ${HANDLER_BIN}" >&2
+    exit 1
+fi
+
+exec "${HANDLER_BIN}" "$@"

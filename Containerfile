@@ -1,45 +1,33 @@
 # ============================================================
-# Stage 1: Build environment (Amazon Linux 2023)
+# Stage 1: Builder — Conan package (library + handler)
 # ============================================================
 FROM amazonlinux:2023 AS builder
 
 ARG BUILD_TYPE=Release
 
-# Install build tools
 RUN dnf install -y \
-        gcc gcc-c++ cmake ninja-build git \
+        gcc gcc-c++ binutils cmake ninja-build git \
         python3 python3-pip \
         tar xz curl ca-certificates \
         ncurses-devel which \
     && dnf clean all
 
-# Install Conan 2.x
 RUN pip3 install --no-cache-dir "conan>=2.4"
-
-# Configure Conan
 RUN conan remote add --url https://center2.conan.io conancenter
 
-# Copy custom recipes and export them to the local Conan cache.
-# conan install --build=missing will find these recipes and build from source.
+WORKDIR /src
+
+# Export custom recipes to local Conan cache
 COPY recipes/ /tmp/recipes/
 RUN conan export /tmp/recipes/arrow/
 RUN conan export /tmp/recipes/quantlib/
 
-# Copy Conan profile
 COPY profiles/ /root/.conan2/profiles/
-
-# Copy project definition
-WORKDIR /src
 COPY conanfile.py .
-
-# Copy source code
 COPY src/ src/
 COPY tests/ tests/
 
-# Install ALL dependencies via Conan
-# --build=missing: build Arrow, QuantLib, and any other deps without prebuilt binaries
-# -pr:b default: use default build profile
-# -pr:h al2023: use the AL2023 host profile
+# Resolve and build all dependencies from source
 RUN conan install . \
     --build=missing \
     -pr:b default \
@@ -47,35 +35,58 @@ RUN conan install . \
     -s:h build_type=${BUILD_TYPE} \
     -s:h compiler.cppstd=26
 
-# Build the static library and handler binary
-RUN conan build . --configure --build
+# Build the library and handler
+RUN conan build .
 
-# Smoke test: verify artifacts exist
-RUN test -f /src/build/${BUILD_TYPE}/lib/liblambda_cpp26.a \
-    && echo "✓ Static library built"
-RUN test -f /src/build/${BUILD_TYPE}/bin/lambda_handler \
-    && echo "✓ Handler binary built"
+# Install to a known prefix (fixes the missing cmake.install bug)
+RUN cmake --install build/${BUILD_TYPE} --prefix /src/install
+
+# Create a stripped copy of the handler for production
+RUN cp /src/install/bin/lambda_handler /src/install/bin/lambda_handler.stripped \
+    && strip --strip-all /src/install/bin/lambda_handler.stripped
+
+# Smoke tests
+RUN test -f /src/install/lib/liblambda_cpp26.a && echo "OK: static library"
+RUN test -f /src/install/bin/lambda_handler && echo "OK: handler binary"
 
 # ============================================================
-# Stage 2: Lambda runtime image
+# Stage 2: Development image (full tools + debug support)
 # ============================================================
-FROM public.ecr.aws/lambda/provided:al2023 AS runtime
+FROM public.ecr.aws/lambda/provided:al2023 AS dev
 
 ARG BUILD_TYPE=Release
 ARG LAMBDA_DIR=/opt/lambda
 
-# Copy the handler binary (statically linked against all deps)
-COPY --from=builder /src/build/${BUILD_TYPE}/bin/lambda_handler ${LAMBDA_DIR}/bin/
+# Debug tools for local development
+RUN dnf install -y gdb gdb-gdbserver strace valgrind && dnf clean all
 
-# Copy the static library and headers (for downstream consumers)
-COPY --from=builder /src/build/${BUILD_TYPE}/lib/ ${LAMBDA_DIR}/lib/
-COPY --from=builder /src/build/${BUILD_TYPE}/include/ ${LAMBDA_DIR}/include/
-
-# Copy bootstrap entrypoint
+COPY --from=builder /src/install/bin/lambda_handler ${LAMBDA_DIR}/bin/
+COPY --from=builder /src/install/lib/ ${LAMBDA_DIR}/lib/
+COPY --from=builder /src/install/include/ ${LAMBDA_DIR}/include/
 COPY src/bootstrap /lambda-entrypoint
 RUN chmod +x /lambda-entrypoint
 
 ENV LAMBDA_TASK_ROOT=${LAMBDA_DIR}
 ENV LAMBDA_RUNTIME_DIR=/var/runtime
+EXPOSE 8080
+
+CMD ["/lambda-entrypoint"]
+
+# ============================================================
+# Stage 3: Production image (stripped, minimal)
+# ============================================================
+FROM public.ecr.aws/lambda/provided:al2023 AS prod
+
+ARG BUILD_TYPE=Release
+ARG LAMBDA_DIR=/opt/lambda
+
+# Only the stripped handler binary — no debug symbols, no lib, no headers
+COPY --from=builder /src/install/bin/lambda_handler.stripped ${LAMBDA_DIR}/bin/lambda_handler
+COPY src/bootstrap /lambda-entrypoint
+RUN chmod +x /lambda-entrypoint
+
+ENV LAMBDA_TASK_ROOT=${LAMBDA_DIR}
+ENV LAMBDA_RUNTIME_DIR=/var/runtime
+EXPOSE 8080
 
 CMD ["/lambda-entrypoint"]

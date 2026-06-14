@@ -42,33 +42,37 @@ podman build \
 # Run postCreateCommand-equivalent inside a temp container, then commit.
 # This bakes ~/.conan2 (dep cache) + /tmp/conan-profiles + /tmp/recipes
 # into the final image so teammates skip the entire dep-build phase.
+#
+# --entrypoint '[]' clears the Lambda base image's ENTRYPOINT (which points
+# at the Lambda Runtime Interface Emulator and would otherwise try to invoke
+# our command as a Lambda handler, causing immediate container exit).
 PREP_CONTAINER="devcontainer-prep-${TAG}"
-log "Creating prep container to bake Conan deps + project build..."
+log "Running conan install + build inside prep container (~5-10 min with cache misses)..."
 podman rm -f "$PREP_CONTAINER" 2>/dev/null || true
-podman create --name "$PREP_CONTAINER" \
-    -v "$REPO_ROOT:/workspaces/lambda_cpp26:Z" \
-    -w /workspaces/lambda_cpp26 \
-    "$BASE_IMAGE" \
-    sleep infinity
-podman start "$PREP_CONTAINER"
 
 # Same command as the original devcontainer.json postCreateCommand, but
 # runs against the bind-mounted workspace so artifacts land in the host tree
 # only for THIS build — the committed image captures ~/.conan2 + system state,
 # not the workspace (which is bind-mounted per-user at open time).
-log "Running conan install + build inside prep container (~5-10 min with cache misses)..."
-podman exec -it "$PREP_CONTAINER" bash -lc '
-    set -euo pipefail
-    cd /workspaces/lambda_cpp26
-    conan install . --build=missing \
-        -pr:h /tmp/conan-profiles/al2023 \
-        -pr:b /tmp/conan-profiles/al2023 \
-        -s:h build_type=Release
-    conan build . \
-        -pr:h /tmp/conan-profiles/al2023 \
-        -pr:b /tmp/conan-profiles/al2023
-'
+podman run --name "$PREP_CONTAINER" \
+    --entrypoint '[]' \
+    -v "$REPO_ROOT:/workspaces/lambda_cpp26:Z" \
+    -w /workspaces/lambda_cpp26 \
+    "$BASE_IMAGE" \
+    bash -lc '
+        set -euo pipefail
+        cd /workspaces/lambda_cpp26
+        conan install . --build=missing \
+            -pr:h /tmp/conan-profiles/al2023 \
+            -pr:b /tmp/conan-profiles/al2023 \
+            -s:h build_type=Release
+        conan build . \
+            -pr:h /tmp/conan-profiles/al2023 \
+            -pr:b /tmp/conan-profiles/al2023
+    '
 
+# Container has now exited but its filesystem (including ~/.conan2) is
+# preserved — commit captures that state into the final image.
 log "Committing prep container as image..."
 FINAL_IMAGE="${IMAGE}:${TAG}"
 podman commit \
@@ -78,8 +82,7 @@ podman commit \
 podman tag "$FINAL_IMAGE" "${IMAGE}:latest"
 podman tag "$FINAL_IMAGE" "${IMAGE}:dev-${DATE_TAG}"
 
-podman stop "$PREP_CONTAINER" >/dev/null
-podman rm   "$PREP_CONTAINER" >/dev/null
+podman rm "$PREP_CONTAINER" >/dev/null
 
 ok "Built: ${FINAL_IMAGE}"
 ok "Tagged: ${IMAGE}:latest, ${IMAGE}:dev-${DATE_TAG}"

@@ -29,6 +29,9 @@ CTestTestfile.cmake
 .DS_Store
 Thumbs.db
 
+# Test outputs (keep fixtures like data/sample.parquet, ignore generated)
+data/option_results*.parquet
+
 # Python
 __pycache__/
 *.pyc

@@ -410,6 +410,11 @@ class ArrowConan(ConanFile):
 
         # Remove pkg-config files (we use CMake targets exclusively).
         rmdir(self, os.path.join(self.package_folder, "lib", "pkgconfig"))
+        # Wipe upstream CMake configs so Conan's CMakeDeps ones are authoritative
+        # (else find_package(Arrow) may load Arrow's own ArrowTargets.cmake and
+        # fail to resolve libs under Conan's names — see parquet bug).
+        rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
+        rmdir(self, os.path.join(self.package_folder, "share"))
 
     # ------------------------------------------------------------------ #
     #  package_info — CMake targets & components                         #
@@ -439,7 +444,6 @@ class ArrowConan(ConanFile):
         arrow = self.cpp_info.components["arrow_static"]
         arrow.libs = ["arrow"]
         arrow.set_property("cmake_target_name", "Arrow::arrow_static")
-        arrow.set_property("cmake_file_name", "Arrow")
         arrow.requires = arrow_core_reqs
 
         # Arrow needs system libraries on POSIX.
@@ -451,7 +455,6 @@ class ArrowConan(ConanFile):
             parquet = self.cpp_info.components["parquet_static"]
             parquet.libs = ["parquet"]
             parquet.set_property("cmake_target_name", "Parquet::parquet_static")
-            parquet.set_property("cmake_file_name", "Parquet")
             parquet.requires = ["arrow_static", "thrift::thrift"]
 
         # --- Flight (libarrow_flight.a) ---
@@ -461,7 +464,6 @@ class ArrowConan(ConanFile):
             flight.set_property(
                 "cmake_target_name", "ArrowFlight::arrow_flight_static"
             )
-            flight.set_property("cmake_file_name", "ArrowFlight")
             flight.requires = [
                 "arrow_static",
                 "grpc::grpc",
@@ -475,7 +477,6 @@ class ArrowConan(ConanFile):
             flight_sql.set_property(
                 "cmake_target_name", "ArrowFlightSql::arrow_flight_sql_static"
             )
-            flight_sql.set_property("cmake_file_name", "ArrowFlightSql")
             flight_sql.requires = ["arrow_flight_static"]
 
         # --- Bundled dependencies (interface target, e.g. jemalloc) ---
@@ -484,12 +485,10 @@ class ArrowConan(ConanFile):
         bundled = self.cpp_info.components["arrow_bundled_dependencies"]
         bundled.libs = []
         bundled.set_property("cmake_target_name", "Arrow::arrow_bundled_dependencies")
-        bundled.set_property("cmake_file_name", "Arrow")
 
         # --- Gandiva (libgandiva.a) ---
         if self.options.gandiva:
             gandiva = self.cpp_info.components["gandiva_static"]
             gandiva.libs = ["gandiva"]
             gandiva.set_property("cmake_target_name", "Gandiva::gandiva_static")
-            gandiva.set_property("cmake_file_name", "Gandiva")
             gandiva.requires = ["arrow_static", "llvm-core::llvm-core"]

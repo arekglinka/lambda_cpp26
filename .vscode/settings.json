@@ -1,0 +1,11 @@
+{
+    "docker.dockerPath": "podman",
+    "docker.host": "unix:///run/podman/podman.sock",
+    "remote.containers.dockerPath": "podman",
+    "C_Cpp.intelliSenseEngine": "Disabled",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build/Release",
+        "--query-driver=/opt/gcc16/bin/g++",
+        "-j=4"
+    ]
+}

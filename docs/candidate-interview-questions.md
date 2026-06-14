@@ -1401,3 +1401,112 @@ The key prerequisite: checking the QuantLib recipe's `cpp_info.set_property("cma
 4. **GH Actions CI**: create `.github/workflows/ci.yml` that runs the full build → test pipeline.
 5. **Size profiling**: add `MinSizeRel` + LTO + measure the final `.so` size.
 6. ** Conan recipe upstreaming**: submit the conandata.yml + cmake_layout + package_folder fixes to ConanCenter to benefit the community.
+
+---
+
+## Section 11: Development Workflow (Scratch Builds, Linking, IDE)
+
+> These questions cover the practical challenges of iterating on C++ code in a Conan-managed project: scratch file compilation, fat convenience libraries, IDE/IntelliSense configuration, and the trade-offs between static and dynamic linking for development velocity.
+
+### Q61: You want to add a scratch `t1.cpp` to experiment with Arrow + QuantLib APIs without rebuilding the pybind11 extension. How do you structure the project so the scratch file compiles independently without affecting the production `.so` build?
+
+**Answer**: Three key principles:
+
+1. **Physical separation**: Move scratch files to `learn/` (outside `src/`). The `conanfile.py`'s `cmake_layout(src_folder="src")` only compiles files in `src/`. Files in `learn/` are invisible to `conan build .`.
+
+2. **No CMake target pollution**: Do NOT add scratch files to `src/CMakeLists.txt`. Even with `EXCLUDE_FROM_ALL`, it clutters the build configuration. Keep scratch compilation entirely separate.
+
+3. **Standalone build script**: Create `learn/build.sh` that discovers Conan's installed include/library paths (`/root/.conan2/p/b/*/p/`) and compiles with raw `g++` — no CMake, no Conan commands. This gives instant iteration:
+   ```bash
+   ./learn/build.sh t1.cpp   # compile + link in seconds
+   ```
+
+The key insight: Conan installs packages to `/root/.conan2/p/b/<hash>/p/{include,lib}/`. These directories are stable and discoverable with `find`. You don't need Conan or CMake to USE the installed headers and libraries — just point the compiler at them.
+
+A candidate who understands this separation can explain why scratch files should NOT go in the production CMake build, and why a shell script is sometimes the right tool over CMake.
+
+---
+
+### Q62: Your scratch file needs ALL Arrow + QuantLib symbols (not just the subset used by the production `.so`). The production `.so` was built with `--gc-sections` which stripped unreferenced symbols. How do you create a "fat" convenience library that re-exports everything?
+
+**Answer**: Use `--whole-archive` to force the linker to include ALL object files from the static archives, not just those that resolve undefined symbols:
+
+```bash
+g++ -shared -fPIC -o libdev_lib.so \
+    -Wl,--whole-archive \
+    /path/to/libarrow.a \
+    /path/to/libQuantLib.a \
+    /path/to/libarrow_bundled_dependencies.a \
+    -Wl,--no-whole-archive \
+    -lpthread -ldl -lm
+```
+
+Critical details:
+- **`--whole-archive` must wrap ALL archives**: The flag applies to every `.a` between `--whole-archive` and `--no-whole-archive`. If any archive is outside this range, it's linked normally (only referenced symbols included).
+- **Transitive dependencies**: `libarrow_bundled_dependencies.a` contains brotli but NOT lz4, zstd, snappy, re2, utf8proc, or zlib. These are separate Conan packages that must be included too — otherwise `libdev_lib.so` has undefined references to `LZ4_compress_default`, `ZSTD_compress`, `snappy::RawCompress`, `re2::RE2::RE2()`, etc.
+- **Boost exclusion**: Boost was compiled WITHOUT `-fPIC` (position-independent code). Static archives without PIC cannot be linked into a shared library on x86_64 — the linker errors with `relocation R_X86_64_32S against ... can not be used when making a shared object; recompile with -fPIC`. Since Arrow and QuantLib only use boost HEADERS (not compiled boost libraries), boost `.a` files must be excluded from `--whole-archive`.
+- **Build tool exclusion**: Conan also installs build-only packages (flex, bison, m4) whose `.a` files contain `main()` — including them causes duplicate `main` definition errors.
+
+The working approach: discover all `.a` files in the Conan cache, exclude boost/brotli/build-tools, and `--whole-archive` the rest. Build `libdev_lib.so` once (~1 min), then every scratch file links against just `-ldev_lib` (seconds).
+
+---
+
+### Q63: Why can't you just link scratch files against the production `sum_columns.so`? It already has Arrow + QuantLib statically linked — wouldn't that be the ultimate convenience library?
+
+**Answer**: No — for three reasons:
+
+1. **`--gc-sections` stripped unreferenced symbols**: The production `.so` was built with `-Wl,--gc-sections` which removes every Arrow/QuantLib symbol that `sum_columns.cpp` doesn't directly call. If your scratch file calls `arrow::Table::Make()` but `sum_columns.cpp` never calls it, that symbol was garbage-collected out. You'd get "undefined reference" at link time.
+
+2. **Undefined Python C API symbols**: The `.so` is a CPython MODULE — it has undefined references to `PyErr_SetObject`, `PyObject_GenericGetDict`, etc. These are resolved at `dlopen()` time by the Python interpreter. If you link an executable against this `.so`, the linker tries to resolve ALL symbols (including the Python ones) and fails.
+
+3. **Wrong artifact type**: The `.so` is a Python extension module (suffix `.cpython-312-x86_64-linux-gnu.so`), not a standard shared library. While you CAN technically link against it with `-l:sum_columns.cpython-312-x86_64-linux-gnu.so`, the combination of stripped symbols + undefined Python symbols makes it unusable as a general-purpose convenience library.
+
+The fat dev library (`libdev_lib.so` from Q62) solves all three: it includes ALL symbols (no gc-sections), has no Python dependencies, and is a standard shared library.
+
+---
+
+### Q64: VSCode shows "Unknown type name 'requires'" on your C++26 file. The project has both `ms-vscode.cpptools` and `llvm-vs-code-extensions.vscode-clangd` extensions installed. How do you fix the false positives?
+
+**Answer**: Two issues, two fixes:
+
+**Issue 1: Extension conflict.** Both cpptools and clangd provide IntelliSense and conflict. cpptools might be the active engine, using its own (incorrect) analysis instead of clangd's. Disable cpptools' IntelliSense in `.vscode/settings.json`:
+```json
+{
+    "C_Cpp.intelliSenseEngine": "Disabled"
+}
+```
+This makes clangd the sole IntelliSense provider.
+
+**Issue 2: Missing compile flags for files outside the CMake build.** clangd reads `compile_commands.json` (from CMake) for files IN the build. For files OUTSIDE the build (like `learn/t1.cpp`), it falls back to default flags — typically C++17 or even C++11, which doesn't recognize `requires`, `concepts`, or `std::println`. Two fixes:
+
+- **`.clangd` at project root** (applies globally):
+  ```yaml
+  CompileFlags:
+    Add:
+      - -std=c++26
+  ```
+
+- **`compile_flags.txt` in the file's directory** (applies to that directory only):
+  ```
+  -std=c++26
+  -I/path/to/arrow/include
+  -I/path/to/quantlib/include
+  ```
+
+clangd checks `compile_flags.txt` first, then `.clangd`, then `compile_commands.json`. The `learn/build.sh` script can auto-generate `compile_flags.txt` from the discovered Conan include paths.
+
+---
+
+### Q65: You're building `libdev_lib.so` from all Conan static archives with `--whole-archive`. The linker fails: `relocation R_X86_64_32S against '.bss._gm_' can not be used when making a shared object; recompile with -fPIC`. Which package is the culprit and why?
+
+**Answer**: **Boost**. The Conan profile builds boost with `fPIC=False` by default (or the boost recipe ignores the `fPIC` option for compiled libraries). Static archives compiled without `-fPIC` contain position-dependent code (absolute address references like `R_X86_64_32S`) that cannot be relocated at runtime — required for shared libraries.
+
+The fix: **exclude all boost `.a` files** from the `--whole-archive` group. Arrow and QuantLib use boost in **header-only mode** (`QL_USE_STD_CLASSES=ON`, Arrow's `ARROW_WITH_BOOST=OFF` or header-only boost). The compiled boost libraries (filesystem, regex, thread, etc.) are never called at link time — only the headers are needed for compilation.
+
+To verify which `.a` files lack PIC:
+```bash
+readelf -d libboost_container.a | grep TEXTREL
+# If TEXTREL is present, the archive was compiled without -fPIC
+```
+
+A candidate who understands position-independent code, why shared libraries require it, and how to diagnose the linker error demonstrates real systems-level C++ knowledge.

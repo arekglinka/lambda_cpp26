@@ -1,0 +1,29 @@
+# Conan 2.x dev profile — shared libs for fast linking in learn/
+# Usage: conan install . -pr:h profiles/dev-shared --build=missing
+[settings]
+os=Linux
+arch=x86_64
+compiler=gcc
+compiler.version=16
+compiler.cppstd=17
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[options]
+arrow/*:gandiva=False
+arrow/*:flight=False
+arrow/*:flight_sql=False
+arrow/*:s3=False
+arrow/*:orc=False
+arrow/*:shared=True
+quantlib/*:shared=True
+boost/*:shared=True
+openssl/*:shared=True
+thrift/*:shared=True
+lz4/*:shared=True
+zstd/*:shared=True
+snappy/*:shared=True
+zlib/*:shared=True
+brotli/*:shared=True
+re2/*:shared=True
+utf8proc/*:shared=True

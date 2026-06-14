@@ -1,0 +1,58 @@
+name: DevContainer Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .devcontainer/**
+      - recipes/**
+      - profiles/**
+      - src/**
+      - conanfile.py
+      - .github/workflows/devcontainer.yml
+  workflow_dispatch:
+  schedule:
+    # Rebuild weekly to pick up base-image security updates from ECR.
+    - cron: '0 3 * * 0'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Podman (rootful, matching local dev setup)
+        run: |
+          sudo systemctl enable --now podman.socket
+
+      - name: Log in to ghcr.io (must precede build script, which pushes)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build + bake Conan deps + commit + push
+        run: |
+          ./scripts/build-devcontainer.sh
+        env:
+          PUSH: "1"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### DevContainer image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published to:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "ghcr.io/${OWNER}/lambda_cpp26-dev:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "ghcr.io/${OWNER}/lambda_cpp26-dev:dev-$(date -u +%Y%m%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Teammates: \`git pull\` then Reopen in Container — VSCode will pull the new image automatically." >> "$GITHUB_STEP_SUMMARY"

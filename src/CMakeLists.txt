@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.28)
 project(lambda_cpp26 LANGUAGES CXX)
 
+# Emit compile_commands.json so clangd / vscode-cpptools can resolve includes
+# (pybind11, Arrow, GCC 16 stdlib) for IntelliSense.  Without this, editors
+# show false-positive errors on every #include they can't see.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # --- Python + pybind11 ---
 # Development.Module (not Development) links libpython DYNAMICALLY — required
 # for a CPython extension module (the PyInit_ entry point needs the host

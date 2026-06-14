@@ -31,7 +31,8 @@ ENV CXXFLAGS=""
 
 RUN pip3.12 install --no-cache-dir \
     "conan>=2.4" "cmake>=3.28" "ninja>=1.11" \
-    "pybind11>=2.13" "pyarrow>=15.0" "pytest>=8.0"
+    "pybind11>=2.13" "pyarrow>=15.0" "pytest>=8.0" \
+    "clangd>=19"
 
 WORKDIR /workspace
 

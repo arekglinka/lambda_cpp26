@@ -21,6 +21,7 @@ find_package(pybind11 CONFIG REQUIRED)
 
 # --- Arrow (C Data Interface + compute) ---
 find_package(Arrow REQUIRED CONFIG)
+find_package(QuantLib REQUIRED CONFIG)
 
 # --- pybind11 extension module ---
 pybind11_add_module(sum_columns
@@ -36,6 +37,7 @@ target_link_libraries(sum_columns PRIVATE
     pybind11::module
     Arrow::arrow_static
     Arrow::arrow_bundled_dependencies
+    QuantLib::QuantLib
 )
 
 # Bundle GCC 16's libstdc++/libgcc INTO the .so so it runs on the Lambda

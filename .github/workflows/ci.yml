@@ -12,12 +12,57 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26
+  BASE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26-base
 
 jobs:
-  build-test-publish:
+  base:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
+    outputs:
+      base_tag: ${{ steps.hash.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Hash base inputs
+        id: hash
+        run: |
+          HASH=$(cat Containerfile.base conanfile.py profiles/al2023 \
+                recipes/arrow/conanfile.py recipes/arrow/conandata.yml \
+                recipes/quantlib/conanfile.py recipes/quantlib/conandata.yml \
+              | sha256sum | cut -c1-16)
+          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Base tag: $HASH"
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Check if base image exists
+        id: check
+        run: |
+          if podman pull ${{ env.BASE }}:${{ steps.hash.outputs.tag }} 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Base image cached — skipping rebuild"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Base image not found — will rebuild"
+          fi
+
+      - name: Build + push base image
+        if: steps.check.outputs.exists != 'true'
+        run: |
+          podman build \
+            -f Containerfile.base \
+            -t ${{ env.BASE }}:${{ steps.hash.outputs.tag }} \
+            -t ${{ env.BASE }}:latest \
+            .
+          podman push ${{ env.BASE }}:${{ steps.hash.outputs.tag }}
+          podman push ${{ env.BASE }}:latest
+          echo "::notice::Built new base image (${{ steps.hash.outputs.tag }})"
+
+  build-test-publish:
+    needs: base
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -30,24 +75,22 @@ jobs:
             VERSION="0.0.0-dev.${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
 
-      - name: Build + test (cleanroom)
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build + test (fast — base cached)
         run: |
-          podman build --target test \
-            -f Containerfile \
+          podman build \
+            --build-arg BASE_TAG=${{ needs.base.outputs.base_tag }} \
+            --build-arg REGISTRY_OWNER=${{ github.repository_owner }} \
+            --target test \
             -t lambda-cpp26:test \
-            --build-arg BUILD_TYPE=Release
-
-      - name: Build runtime image for publishing
-        run: |
-          podman build --target test \
-            -f Containerfile \
             -t ${{ env.IMAGE }}:${{ steps.version.outputs.version }} \
             -t ${{ env.IMAGE }}:latest \
-            --build-arg BUILD_TYPE=Release
+            -f Containerfile .
 
-      - name: Extract .so for release asset + size check
+      - name: Extract .so + size check
         run: |
           podman run --rm --entrypoint sh lambda-cpp26:test \
             -c 'cat /var/task/sum_columns.so' > sum_columns.so
@@ -57,12 +100,9 @@ jobs:
             echo "FAIL: .so exceeds 80 MB budget"
             exit 1
           fi
-          echo "OK: within 80 MB budget"
 
-      - name: Push to ghcr.io
+      - name: Push image to ghcr.io
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | \
-            podman login ghcr.io -u ${{ github.actor }} --password-stdin
           podman push ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
           podman push ${{ env.IMAGE }}:latest
 

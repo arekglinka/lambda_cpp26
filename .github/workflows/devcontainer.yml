@@ -9,6 +9,7 @@ on:
       - profiles/**
       - src/**
       - conanfile.py
+      - scripts/build-devcontainer.sh
       - .github/workflows/devcontainer.yml
   workflow_dispatch:
   schedule:

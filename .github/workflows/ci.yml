@@ -1,32 +1,36 @@
-name: Build & Test
+name: Release Build
 
 on:
   push:
-    branches: [main]
-    paths:
-      - src/**
-      - conanfile.py
-      - Containerfile
-      - recipes/**
-      - profiles/**
-      - handler.py
-      - data/**
-      - tests/**
-      - .github/workflows/ci.yml
-  pull_request:
-    branches: [main]
+    branches: [release]
+    tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26
+
 jobs:
-  build-and-test:
+  build-test-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show podman version
-        run: podman --version
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev.${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
 
       - name: Build + test (cleanroom)
         run: |
@@ -35,14 +39,18 @@ jobs:
             -t lambda-cpp26:test \
             --build-arg BUILD_TYPE=Release
 
-      - name: Extract .so for size check
+      - name: Build runtime image for publishing
         run: |
-          podman build --target builder \
+          podman build --target test \
             -f Containerfile \
-            -t lambda-cpp26:builder \
+            -t ${{ env.IMAGE }}:${{ steps.version.outputs.version }} \
+            -t ${{ env.IMAGE }}:latest \
             --build-arg BUILD_TYPE=Release
-          podman run --rm --entrypoint sh lambda-cpp26:builder \
-            -c 'cat /tmp/sum_columns.so' > sum_columns.so
+
+      - name: Extract .so for release asset + size check
+        run: |
+          podman run --rm --entrypoint sh lambda-cpp26:test \
+            -c 'cat /var/task/sum_columns.so' > sum_columns.so
           SIZE=$(stat -c%s sum_columns.so)
           echo "Extension size: $SIZE bytes ($((SIZE / 1048576)) MB)"
           if [ "$SIZE" -gt 83886080 ]; then
@@ -51,7 +59,21 @@ jobs:
           fi
           echo "OK: within 80 MB budget"
 
-      - name: Verify ldd (no third-party shared deps)
+      - name: Push to ghcr.io
         run: |
-          podman run --rm --entrypoint sh lambda-cpp26:test \
-            -c 'ldd /var/task/sum_columns.so'
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            podman login ghcr.io -u ${{ github.actor }} --password-stdin
+          podman push ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          podman push ${{ env.IMAGE }}:latest
+
+      - name: Create GitHub Release with .so asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            sum_columns.so \
+            --title "${{ github.ref_name }}" \
+            --notes "Lambda C++26 extension — Arrow C++ 18 + QuantLib 1.38
+
+          Size: $(stat -c%s sum_columns.so) bytes ($(($(stat -c%s sum_columns.so) / 1048576)) MB)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

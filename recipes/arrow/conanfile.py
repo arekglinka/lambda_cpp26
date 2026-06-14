@@ -116,36 +116,35 @@ class ArrowConan(ConanFile):
         )
 
         # --- Compression codecs (all static) ---
-        self.requires("lz4/1.10.2", options={"shared": False})
-        self.requires("zstd/1.5.7", options={"shared": False})
-        self.requires("snappy/1.2.2", options={"shared": False})
+        self.requires("lz4/1.10.0", options={"shared": False})
+        self.requires("zstd/1.5.6", options={"shared": False})
+        self.requires("snappy/1.2.1", options={"shared": False})
         self.requires("zlib/1.3.1", options={"shared": False})
         self.requires("brotli/1.1.0", options={"shared": False})
 
         # --- String processing ---
-        self.requires("re2/2024.07.02", options={"shared": False})
-        self.requires("utf8proc/2.10.0", options={"shared": False})
-        self.requires("rapidjson/1.1.0")
+        self.requires("re2/20251105", options={"shared": False})
+        self.requires("utf8proc/2.9.0", options={"shared": False})
+        self.requires("rapidjson/cci.20250205")
 
         # --- TLS/SSL (needed by gRPC-SSL, S3, Flight) ---
-        self.requires("openssl/3.5.0", options={"shared": False})
+        self.requires("openssl/3.5.7", options={"shared": False})
 
         # --- Flight / Flight SQL ---
         if self.options.flight:
-            self.requires("grpc/1.76.0", options={"shared": False})
+            self.requires("grpc/1.81.0", options={"shared": False})
             self.requires("protobuf/5.29.3", options={"shared": False})
 
         # --- Parquet ---
         if self.options.parquet:
-            self.requires("thrift/0.22.0", options={"shared": False})
+            self.requires("thrift/0.23.0", options={"shared": False})
 
         # --- Gandiva (LLVM JIT) ---
         if self.options.gandiva:
-            self.requires("llvm-core/18.1.3", options={"shared": False})
+            self.requires("llvm-core/19.1.7", options={"shared": False})
 
-        # --- S3 filesystem ---
-        if self.options.s3:
-            self.requires("aws-c-sdk-cpp/1.11.778", options={"shared": False})
+        # --- S3 filesystem (Arrow bundles AWS SDK via ThirdpartyToolchain) ---
+        # No explicit Conan dep needed — Arrow downloads and builds AWS CRT.
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.25 <4]")
@@ -320,10 +319,6 @@ class ArrowConan(ConanFile):
             prefix_paths.append(
                 self.dependencies["protobuf"].cpp_info.rootpath
             )
-        if self.options.s3:
-            prefix_paths.append(
-                self.dependencies["aws-c-sdk-cpp"].cpp_info.rootpath
-            )
         for dep_name in (
             "lz4", "zstd", "snappy", "zlib", "brotli",
             "re2", "utf8proc", "openssl",
@@ -420,9 +415,6 @@ class ArrowConan(ConanFile):
             "brotli::brotli",
             "openssl::openssl",
         ]
-        if self.options.s3:
-            arrow_core_reqs.append("aws-c-sdk-cpp::aws-c-sdk-cpp")
-
         # --- Arrow core (libarrow.a) ---
         # Consumer references this as "arrow::arrow_static".
         arrow = self.cpp_info.components["arrow_static"]

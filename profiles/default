@@ -1,0 +1,18 @@
+# Conan 2.x default build profile (matches AL2023 container environment).
+# Used when -pr:b is not specified (same as host since we build natively).
+
+[settings]
+os=Linux
+arch=x86_64
+compiler=gcc
+compiler.version=16
+compiler.cppstd=26
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[conf]
+tools.build:jobs=8
+tools.cmake.cmaketoolchain:generator=Ninja
+tools.build:cxxflags=["-ffunction-sections", "-fdata-sections"]
+tools.build:exelinkflags=["-Wl,--gc-sections", "-Wl,--as-needed"]
+tools.build:sharedlinkflags=["-Wl,--gc-sections", "-Wl,--as-needed"]

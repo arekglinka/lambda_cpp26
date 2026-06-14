@@ -63,27 +63,20 @@ class LambdaCpp26ConanFile(ConanFile):
             options={"header_only": True},
         )
 
-        self.requires("grpc/1.76.0", options={"shared": False})
+        self.requires("grpc/1.81.0", options={"shared": False})
         self.requires("protobuf/5.29.3", options={"shared": False})
-        self.requires("thrift/0.22.0", options={"shared": False})
-        self.requires("re2/2024.07.02", options={"shared": False})
-        self.requires("utf8proc/2.10.0", options={"shared": False})
-        self.requires("rapidjson/1.1.0")
+        self.requires("thrift/0.23.0", options={"shared": False})
+        self.requires("re2/20251105", options={"shared": False})
+        self.requires("utf8proc/2.9.0", options={"shared": False})
+        self.requires("rapidjson/cci.20250205")
 
-        self.requires("lz4/1.10.2", options={"shared": False})
-        self.requires("zstd/1.5.7", options={"shared": False})
-        self.requires("snappy/1.2.2", options={"shared": False})
+        self.requires("lz4/1.10.0", options={"shared": False})
+        self.requires("zstd/1.5.6", options={"shared": False})
+        self.requires("snappy/1.2.1", options={"shared": False})
         self.requires("zlib/1.3.1", options={"shared": False})
         self.requires("brotli/1.1.0", options={"shared": False})
 
-        # LLVM is Gandiva's JIT backend; static LLVM is mandatory for Lambda.
-        if self.options.with_gandiva:
-            self.requires("llvm-core/18.1.3", options={"shared": False})
-
-        self.requires("openssl/3.5.0", options={"shared": False})
-
-        if self.options.with_s3:
-            self.requires("aws-c-sdk-cpp/1.11.778", options={"shared": False})
+        self.requires("openssl/3.5.7", options={"shared": False})
 
         self.requires(
             "arrow/18.0.0",
@@ -103,13 +96,12 @@ class LambdaCpp26ConanFile(ConanFile):
 
         self.requires("quantlib/1.38", options={"shared": False})
 
-        # AWS Lambda C++ runtime (header-only) — needed by the sample handler
-        self.requires("aws-lambda-runtime/0.2.6")
+        # aws-lambda-cpp is NOT on ConanCenter.
+        # It is built from source in the Containerfile and installed to /usr/local.
+        # The handler links against it via system search paths (CMakeLists.txt).
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.25 <4]")
-        self.tool_requires("ninja/[>=1.11 <2]")
-        self.tool_requires("ccache/[>=4.10]")
 
     def layout(self):
         cmake_layout(self, src_folder="src")

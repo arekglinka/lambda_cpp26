@@ -29,6 +29,10 @@ CTestTestfile.cmake
 .DS_Store
 Thumbs.db
 
+# Python
+__pycache__/
+*.pyc
+
 # Container
 *.tar
 *.tar.gz

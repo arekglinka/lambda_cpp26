@@ -37,15 +37,20 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 # --- Sample Lambda handler binary ---
-find_package(aws-lambda-runtime REQUIRED)
+# aws-lambda-cpp is NOT on ConanCenter; it is built from source in the
+# Containerfile and installed to /usr/local.  Link against the system copy.
+find_library(AWS_LAMBDA_RT_LIB aws-lambda-runtime HINTS /usr/local/lib)
+find_path(AWS_LAMBDA_RT_INCLUDE aws/lambda-runtime/runtime-api.h HINTS /usr/local/include)
 
 add_executable(lambda_handler
     handler.cpp
 )
+target_include_directories(lambda_handler PRIVATE ${AWS_LAMBDA_RT_INCLUDE})
 target_link_libraries(lambda_handler
     PRIVATE
         ${PROJECT_NAME}
-        aws-lambda-runtime::aws-lambda-runtime
+        ${AWS_LAMBDA_RT_LIB}
+        curl
         pthread
         dl
         rt

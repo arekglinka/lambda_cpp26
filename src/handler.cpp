@@ -1,10 +1,5 @@
 /// @file handler.cpp
 /// Sample AWS Lambda handler demonstrating lambda_cpp26 library usage.
-///
-/// This handler uses the aws-lambda-cpp runtime library (header-only, Conan:
-/// aws-lambda-runtime/0.2.6). The bootstrap shell script invokes this binary
-/// via the Lambda Runtime Interface Emulator (RIE) for local testing or the
-/// Lambda Runtime API when deployed.
 
 #include <lambda_cpp26/api.hpp>
 

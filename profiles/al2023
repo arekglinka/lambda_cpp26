@@ -12,25 +12,20 @@
 os=Linux
 arch=x86_64
 compiler=gcc
-compiler.version=14
-compiler.libcxx=libstdc++11
+compiler.version=16
 compiler.cppstd=26
-build_type=Release
+    compiler.libcxx=libstdc++11
+    build_type=Release
 
 [conf]
 # Parallel compilation jobs.
 tools.build:jobs=8
 
-# Ninja generator for all CMake builds.
-tools.cmake.cmaketoolchain:generator=Ninja
-
-# CMake preset name (useful for IDE integration and reproducible builds).
-tools.cmake.cmaketoolchain:preset=conan-release
-
 # Section-level GC flags for selective static linking.
 # Arrow and QuantLib produce large archives; -ffunction-sections +
 # -fdata-sections emit per-function data, and the consumer's
 # -Wl,--gc-sections linker flag discards unreferenced symbols.
+tools.build:cflags=["-ffunction-sections", "-fdata-sections", "-Wno-error=implicit-function-declaration", "-Wno-error=int-conversion"]
 tools.build:cxxflags=["-ffunction-sections", "-fdata-sections"]
 tools.build:exelinkflags=["-Wl,--gc-sections", "-Wl,--as-needed"]
 tools.build:sharedlinkflags=["-Wl,--gc-sections", "-Wl,--as-needed"]

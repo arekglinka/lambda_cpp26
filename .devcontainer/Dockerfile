@@ -10,7 +10,7 @@ RUN dnf install -y \
         bison flex texinfo wget diffutils \
         perl perl-FindBin \
         zlib-devel openssl-devel \
-        clang-tools-extra clangd gdb valgrind \
+        clang-tools-extra gdb valgrind \
     && dnf clean all
 
 RUN mkdir -p /tmp/gcc && cd /tmp/gcc && \

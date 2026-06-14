@@ -32,7 +32,7 @@ build: ## Build the pybind11 .so extension (builder stage)
 		--build-arg BUILD_TYPE=$(BUILD_TYPE)
 	@echo "==> Builder image ready: $(IMAGE_NAME):builder"
 	@echo "==> Extracting .so..."
-	@$(PODMAN_RUN) $(IMAGE_NAME):builder cat /tmp/sum_columns.so > sum_columns.so 2>/dev/null || \
+	@$(PODMAN) run --rm --entrypoint sh $(IMAGE_NAME):builder -c 'cat /tmp/sum_columns.so' > sum_columns.so 2>/dev/null || \
 		echo "==> WARNING: .so not found — check the builder stage"
 	@ls -lh sum_columns.so 2>/dev/null || true
 
@@ -87,8 +87,8 @@ shell: build ## Drop into the builder container shell
 	$(PODMAN_RUN) -it --entrypoint /bin/bash $(IMAGE_NAME):builder
 
 inspect: build ## Run ldd + readelf on the .so inside the builder
-	@echo "==> ldd:"; $(PODMAN_RUN) $(IMAGE_NAME):builder ldd /tmp/sum_columns.so 2>&1 || true
-	@echo "==> NEEDED:"; $(PODMAN_RUN) $(IMAGE_NAME):builder readelf -d /tmp/sum_columns.so 2>/dev/null | grep NEEDED || echo "(none)"
+	@echo "==> ldd:"; $(PODMAN) run --rm --entrypoint sh $(IMAGE_NAME):builder -c 'ldd /tmp/sum_columns.so' 2>&1 || true
+	@echo "==> NEEDED:"; $(PODMAN) run --rm --entrypoint sh $(IMAGE_NAME):builder -c 'readelf -d /tmp/sum_columns.so' 2>/dev/null | grep NEEDED || echo "(none)"
 
 clean: ## Remove images and clean build artifacts
 	@echo "==> Cleaning..."

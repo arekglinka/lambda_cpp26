@@ -1,0 +1,57 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/**
+      - conanfile.py
+      - Containerfile
+      - recipes/**
+      - profiles/**
+      - handler.py
+      - data/**
+      - tests/**
+      - .github/workflows/ci.yml
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show podman version
+        run: podman --version
+
+      - name: Build + test (cleanroom)
+        run: |
+          podman build --target test \
+            -f Containerfile \
+            -t lambda-cpp26:test \
+            --build-arg BUILD_TYPE=Release
+
+      - name: Extract .so for size check
+        run: |
+          podman build --target builder \
+            -f Containerfile \
+            -t lambda-cpp26:builder \
+            --build-arg BUILD_TYPE=Release
+          podman run --rm --entrypoint sh lambda-cpp26:builder \
+            -c 'cat /tmp/sum_columns.so' > sum_columns.so
+          SIZE=$(stat -c%s sum_columns.so)
+          echo "Extension size: $SIZE bytes ($((SIZE / 1048576)) MB)"
+          if [ "$SIZE" -gt 83886080 ]; then
+            echo "FAIL: .so exceeds 80 MB budget"
+            exit 1
+          fi
+          echo "OK: within 80 MB budget"
+
+      - name: Verify ldd (no third-party shared deps)
+        run: |
+          podman run --rm --entrypoint sh lambda-cpp26:test \
+            -c 'ldd /var/task/sum_columns.so'

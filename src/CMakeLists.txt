@@ -1,75 +1,54 @@
-cmake_minimum_required(VERSION 3.25)
-project(lambda_cpp26 LANGUAGES CXX C)
+cmake_minimum_required(VERSION 3.28)
+project(lambda_cpp26 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 26)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# --- Python + pybind11 ---
+# Development.Module (not Development) links libpython DYNAMICALLY — required
+# for a CPython extension module (the PyInit_ entry point needs the host
+# interpreter's libpython at runtime).
+find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 
-# --- Static library target ---
-add_library(${PROJECT_NAME} STATIC
-    lambda_cpp26/api.cpp
+# pybind11 is pip-installed — find its CMake dir dynamically.
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" -c "import pybind11; print(pybind11.get_cmake_dir())"
+    OUTPUT_VARIABLE PYBIND11_CMAKE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _pybind11_result
 )
+if(_pybind11_result EQUAL 0 AND PYBIND11_CMAKE_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "${PYBIND11_CMAKE_DIR}")
+endif()
+find_package(pybind11 CONFIG REQUIRED)
 
-target_include_directories(${PROJECT_NAME}
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-        $<INSTALL_INTERFACE:include>
-)
-
-# Conan deps — CMakeToolchain sets CMAKE_PREFIX_PATH to include generators dir
+# --- Arrow (C Data Interface + compute) ---
 find_package(Arrow REQUIRED CONFIG)
-find_package(QuantLib REQUIRED CONFIG)
-find_package(Boost REQUIRED)
 
-target_link_libraries(${PROJECT_NAME}
-    PUBLIC
-        Arrow::arrow_static
-        Arrow::parquet_static
-        Arrow::arrow_bundled_dependencies
-        QuantLib::QuantLib
-        Boost::boost
-    PRIVATE
-        pthread
-        dl
-        rt
-        m
+# --- pybind11 extension module ---
+pybind11_add_module(sum_columns
+    MODULE
+    sum_columns.cpp
 )
 
-# --- Sample Lambda handler binary ---
-# aws-lambda-cpp is NOT on ConanCenter; it is built from source in the
-# Containerfile and installed to /usr/local.  Link against the system copy.
-find_library(AWS_LAMBDA_RT_LIB aws-lambda-runtime HINTS /usr/local/lib)
-find_path(AWS_LAMBDA_RT_INCLUDE aws/lambda-runtime/runtime-api.h HINTS /usr/local/include)
+# Our TU compiles at C++26; the dependency graph stays at c++17 (Conan profile).
+target_compile_features(sum_columns PRIVATE cxx_std_26)
 
-add_executable(lambda_handler
-    handler.cpp
-)
-target_include_directories(lambda_handler PRIVATE ${AWS_LAMBDA_RT_INCLUDE})
-target_link_libraries(lambda_handler
-    PRIVATE
-        ${PROJECT_NAME}
-        ${AWS_LAMBDA_RT_LIB}
-        curl
-        pthread
-        dl
-        rt
-        m
+target_link_libraries(sum_columns PRIVATE
+    Python::Module
+    pybind11::module
+    Arrow::arrow_static
+    Arrow::arrow_bundled_dependencies
 )
 
-# --- Install ---
-include(GNUInstallDirs)
-
-install(TARGETS ${PROJECT_NAME}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+# Bundle GCC 16's libstdc++/libgcc INTO the .so so it runs on the Lambda
+# runtime's older libstdc++ without GLIBCXX errors.  --gc-sections discards
+# unreferenced static-archive symbols (Arrow + QuantLib are large).
+target_link_options(sum_columns PRIVATE
+    -static-libgcc
+    -static-libstdc++
+    -Wl,--gc-sections
 )
 
-install(TARGETS lambda_handler
-    RUNTIME DESTINATION bin
-)
-
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/lambda_cpp26/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lambda_cpp26
-    FILES_MATCHING PATTERN "*.hpp"
+# Output: sum_columns.cpython-312-x86_64-linux-gnu.so (no "lib" prefix).
+set_target_properties(sum_columns PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME sum_columns
 )

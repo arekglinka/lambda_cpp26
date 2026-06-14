@@ -40,3 +40,4 @@ __pycache__/
 # Secrets
 .env
 .env.local
+*.log

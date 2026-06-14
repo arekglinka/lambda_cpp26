@@ -2,23 +2,26 @@
 #
 # Usage:
 #   conan install . --profile=profiles/al2023 --build=missing
-#
-# AL2023 ships GCC 14 by default.  The Containerfile installs GCC 16;
-# override at build time:
-#   conan install . --profile=profiles/al2023 \
-#       -s compiler.version=16 -s compiler.cppstd=26
 
 [settings]
 os=Linux
 arch=x86_64
 compiler=gcc
 compiler.version=16
-compiler.cppstd=26
-    compiler.libcxx=libstdc++11
-    build_type=Release
+compiler.cppstd=17
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[options]
+# Arrow modules the recipe defaults to ON but Lambda does not need.
+# Python (PyArrow) handles all cloud I/O; the C++ extension is pure compute.
+arrow/*:gandiva=False
+arrow/*:flight=False
+arrow/*:flight_sql=False
+arrow/*:s3=False
+arrow/*:orc=False
 
 [conf]
-# Parallel compilation jobs.
 tools.build:jobs=8
 
 # Section-level GC flags for selective static linking.

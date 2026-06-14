@@ -1,16 +1,18 @@
-"""Conan recipe for lambda_cpp26 — a static library bundling Apache Arrow C++
-(all modules: Parquet, ORC, Flight, Flight SQL, S3, Gandiva, Compute, CSV, JSON)
-and QuantLib, targeted at AWS Lambda on Amazon Linux 2023.
+"""Conan recipe for lambda_cpp26 — a pybind11 C++ extension bundling Apache
+Arrow C++ (core + Parquet + Compute) and QuantLib, targeted at AWS Lambda
+on Amazon Linux 2023 with CPython 3.12.
 
-Build flow (inside the Podman/AL2023 builder):
-    conan install .         --build=missing
-    conan build .           (or `cmake --build` via the generated toolchain)
+Build flow (inside the Podman builder based on lambda/python:3.12):
+    conan install . --build=missing -pr:h al2023
+    conan build .
 
-Arrow and QuantLib are built from custom recipes under `recipes/` because
-ConanCenter's `arrow` recipe ships broken ORC defaults and hardcodes a shared
-LLVM, and ConanCenter's `quantlib` recipe is stuck at 1.30 (current stable
-is 1.38). All other transitive dependencies are pulled from ConanCenter so we
-get version deduplication and a single ABI-consistent dependency graph.
+The build produces a pybind11 MODULE (.so) — not a static library or exe.
+Arrow and QuantLib are built from custom recipes under recipes/ because
+ConanCenter's recipes are outdated or have broken defaults.  All other
+transitive deps come from ConanCenter.
+
+The Lambda profile (profiles/al2023) disables the Arrow modules Lambda does
+not need (those are in the profile's [options] section, not here).
 """
 
 from conan import ConanFile
@@ -23,82 +25,48 @@ class LambdaCpp26ConanFile(ConanFile):
     name = "lambda_cpp26"
     version = "0.1.0"
     license = "MIT"
-    description = "C++26 static library for AWS Lambda — Arrow C++ + QuantLib"
-    topics = ("aws-lambda", "cpp26", "arrow", "quantlib", "al2023")
+    description = "C++26 pybind11 extension for AWS Lambda — Arrow C++ + QuantLib"
+    topics = ("aws-lambda", "cpp26", "arrow", "quantlib", "pybind11", "al2023")
     author = "lambda_cpp26 contributors"
     homepage = "https://github.com/example/lambda_cpp26"
     url = homepage
 
-    package_type = "static-library"
+    package_type = "application"
     settings = "os", "compiler", "build_type", "arch"
-    options = {
-        "shared": [True, False],
-        "fPIC": [True, False],
-        "with_gandiva": [True, False],
-        "with_flight": [True, False],
-        "with_s3": [True, False],
-        "with_orc": [True, False],
-    }
-    default_options = {
-        "shared": False,
-        "fPIC": True,
-        "with_gandiva": True,
-        "with_flight": True,
-        "with_s3": True,
-        "with_orc": True,
-    }
-
-    # auto_shared_fpic: shared=True forces fPIC off; shared=False keeps fPIC.
-    # Requires Conan >= 2.4 (see required_conan_version above).
-    implements = ["auto_shared_fpic"]
 
     def requirements(self):
-        # Boost is header-only for both Arrow and QuantLib. Forcing header_only
-        # here prevents ConanCenter's compiled Boost libs from clashing with
-        # Arrow's bundled third-party copies.
-        self.requires(
-            "boost/1.87.0",
-            transitive_headers=True,
-            transitive_libs=True,
-            options={"header_only": True},
-        )
-
-        self.requires("grpc/1.81.0", options={"shared": False})
-        self.requires("protobuf/5.29.3", options={"shared": False})
-        self.requires("thrift/0.23.0", options={"shared": False})
-        self.requires("re2/20251105", options={"shared": False})
-        self.requires("utf8proc/2.9.0", options={"shared": False})
-        self.requires("rapidjson/cci.20250205")
-
+        # Compression codecs needed by Parquet (all static).
         self.requires("lz4/1.10.0", options={"shared": False})
         self.requires("zstd/1.5.6", options={"shared": False})
         self.requires("snappy/1.2.1", options={"shared": False})
         self.requires("zlib/1.3.1", options={"shared": False})
-        self.requires("brotli/1.1.0", options={"shared": False})
 
+        # Thrift — Parquet's wire format dependency.
+        self.requires("thrift/0.23.0", options={"shared": False})
+
+        # OpenSSL (Arrow crypto/hash).
         self.requires("openssl/3.5.7", options={"shared": False})
 
+        # Arrow: core + Parquet + Compute ONLY.  Python (PyArrow) handles
+        # all cloud I/O.  The modules the recipe defaults to ON are disabled
+        # in the Lambda profile's [options] section.
         self.requires(
             "arrow/18.0.0",
             options={
                 "shared": False,
-                "gandiva": self.options.with_gandiva,
-                "flight": self.options.with_flight,
-                "flight_sql": self.options.with_flight,
-                "s3": self.options.with_s3,
-                "orc": self.options.with_orc,
                 "parquet": True,
                 "compute": True,
-                "csv": True,
-                "json": True,
+                "csv": False,
+                "json": False,
             },
         )
 
         self.requires("quantlib/1.38", options={"shared": False})
 
-        # aws-lambda-cpp is NOT on ConanCenter.
-        # It is built from source in the Containerfile and installed to /usr/local.
-        # The handler links against it via system search paths (CMakeLists.txt).
+        # Boost version override: arrow pins 1.87.0, thrift accepts up to
+        # 1.90.0.  Force 1.90.0 (header-only) across the graph to resolve
+        # the conflict.
+        self.requires("boost/1.90.0", options={"header_only": True}, override=True)
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.25 <4]")
@@ -116,21 +84,12 @@ class LambdaCpp26ConanFile(ConanFile):
         cmake.build()
 
     def package(self):
+        # The pybind11 .so is the sole artifact.  CMake installs it via
+        # the default LIBRARY destination.
         cmake = CMake(self)
         cmake.install()
 
     def package_info(self):
-        self.cpp_info.libs = ["lambda_cpp26"]
-
-        # Pure re-export components: libs=[] because the real libraries live
-        # in the upstream `arrow`/`quantlib` packages. Lets consumers do
-        # find_package(lambda_cpp26 REQUIRED COMPONENTS arrow quantlib).
-        self.cpp_info.components["arrow"].requires = ["arrow::arrow_static"]
-        self.cpp_info.components["arrow"].libs = []
-
-        self.cpp_info.components["quantlib"].requires = ["quantlib::quantlib"]
-        self.cpp_info.components["quantlib"].libs = []
-
-    def test(self):
-        # RIE-based smoke test lives in tests/ (separate agent's scope).
-        pass
+        # This recipe builds a standalone extension module, not a library
+        # consumed by other Conan packages.
+        self.cpp_info.libs = []

@@ -39,7 +39,7 @@ per-module ``CMakeLists.txt``)::
 import os
 
 from conan import ConanFile
-from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain
+from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import copy, get, rmdir
 
 required_conan_version = ">=2.4"
@@ -155,11 +155,9 @@ class ArrowConan(ConanFile):
     # ------------------------------------------------------------------ #
 
     def layout(self):
-        # Arrow's C++ CMakeLists.txt lives in cpp/ within the release
-        # tarball.  source() extracts with strip_root=True, so cpp/ lands
-        # directly under the Conan source root.
         self.folders.source = "cpp"
         self.folders.build = "build"
+        self.folders.generators = "build"
 
     def source(self):
         # strip_root=True removes the apache-arrow-18.0.0/ top-level dir so
@@ -274,7 +272,7 @@ class ArrowConan(ConanFile):
         # ---- LLVM discovery (Gandiva) ----
         if self.options.gandiva:
             llvm = self.dependencies["llvm-core"].cpp_info
-            llvm_dir = os.path.join(llvm.rootpath, "lib", "cmake", "llvm")
+            llvm_dir = os.path.join(self.dependencies["llvm-core"].package_folder, "lib", "cmake", "llvm")
             # Arrow's FindLLVMAlt.cmake calls find_package(LLVM ...).
             # Pointing LLVM_DIR at the Conan-provided llvm-core config makes
             # find_package(LLVM) succeed without a system LLVM install.
@@ -302,22 +300,21 @@ class ArrowConan(ConanFile):
         # find_library()/find_path() searches.  Adding the dep roots to
         # CMAKE_PREFIX_PATH makes those Alt finders succeed.
         prefix_paths = []
-        boost = self.dependencies["boost"].cpp_info
-        prefix_paths.append(boost.rootpath)
+        prefix_paths.append(self.dependencies["boost"].package_folder)
         if self.options.gandiva:
             prefix_paths.append(
-                self.dependencies["llvm-core"].cpp_info.rootpath
+                self.dependencies["llvm-core"].package_folder
             )
         if self.options.parquet:
             prefix_paths.append(
-                self.dependencies["thrift"].cpp_info.rootpath
+                self.dependencies["thrift"].package_folder
             )
         if self.options.flight:
             prefix_paths.append(
-                self.dependencies["grpc"].cpp_info.rootpath
+                self.dependencies["grpc"].package_folder
             )
             prefix_paths.append(
-                self.dependencies["protobuf"].cpp_info.rootpath
+                self.dependencies["protobuf"].package_folder
             )
         for dep_name in (
             "lz4", "zstd", "snappy", "zlib", "brotli",
@@ -325,9 +322,14 @@ class ArrowConan(ConanFile):
         ):
             if dep_name in self.dependencies:
                 prefix_paths.append(
-                    self.dependencies[dep_name].cpp_info.rootpath
+                    self.dependencies[dep_name].package_folder
                 )
         tc.variables["CMAKE_PREFIX_PATH"] = ";".join(prefix_paths)
+
+        if "abseil" in self.dependencies:
+            abseil_inc = os.path.join(self.dependencies["abseil"].package_folder, "include")
+            cxxflags = tc.cache_variables.get("CMAKE_CXX_FLAGS", "")
+            tc.cache_variables["CMAKE_CXX_FLAGS"] = f"{cxxflags} -I{abseil_inc}".strip()
 
         tc.generate()
 
@@ -340,14 +342,31 @@ class ArrowConan(ConanFile):
     # ------------------------------------------------------------------ #
 
     def build(self):
-        cmake = CMake(self)
-        cmake.configure()
+        import subprocess, os
 
-        # LLVM link-time peak memory is ~12 GB; cap parallelism to avoid OOM.
-        if self.options.gandiva:
-            jobs = self._safe_parallel()
-            cmake.build(build_tool_args=["-j", str(jobs)])
+        result = subprocess.run(
+            ["find", "/root/.conan2/p/b", "-name", "CMakeLists.txt",
+             "-path", "*/cpp/CMakeLists.txt", "-not", "-path", "*/test*",
+             "-not", "-path", "*/python/*"],
+            capture_output=True, text=True, timeout=10,
+        )
+        candidates = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+        source_dir = os.path.dirname(candidates[0]) if candidates else None
+
+        if source_dir and source_dir != self.source_folder:
+            self.output.warning(f"arrow: cmake source {self.source_folder} -> {source_dir}")
+            cls = type(self)
+            orig = cls.source_folder
+            cls.source_folder = property(lambda s: source_dir)
+            try:
+                cmake = CMake(self)
+                cmake.configure()
+                cmake.build()
+            finally:
+                cls.source_folder = orig
         else:
+            cmake = CMake(self)
+            cmake.configure()
             cmake.build()
 
     def _safe_parallel(self):

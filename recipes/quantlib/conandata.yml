@@ -1,0 +1,3 @@
+sources:
+  "1.38":
+    url: https://github.com/lballabio/QuantLib/archive/refs/tags/v1.38.tar.gz

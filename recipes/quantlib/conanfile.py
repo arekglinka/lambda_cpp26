@@ -26,7 +26,7 @@ Verified CMake targets (from QuantLib-1.38 ql/CMakeLists.txt)::
 import os
 
 from conan import ConanFile
-from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain
+from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import copy, get
 
 required_conan_version = ">=2.4"
@@ -88,10 +88,7 @@ class QuantLibConan(ConanFile):
     # ------------------------------------------------------------------ #
 
     def layout(self):
-        # QuantLib-1.38.tar.gz extracts to QuantLib-1.38/ with CMakeLists.txt
-        # at the root.  strip_root=True flattens that to the Conan source root.
-        self.folders.source = "."
-        self.folders.build = "build"
+        cmake_layout(self, src_folder=".")
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)

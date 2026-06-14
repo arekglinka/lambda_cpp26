@@ -1,5 +1,5 @@
 # ============================================================
-# Lambda C++26 — Podman Build Orchestration
+# Lambda C++26 — pybind11 Extension Podman Build Orchestration
 # ============================================================
 
 IMAGE_NAME    ?= lambda-cpp26
@@ -10,89 +10,90 @@ PODMAN        ?= podman
 PODMAN_BUILD  := $(PODMAN) build -f $(CONTAINERFILE)
 PODMAN_RUN    := $(PODMAN) run --rm
 
-.PHONY: all build build-dev build-prod test test-prod shell clean help
+# Size budget for the stripped .so (80 MB — research bg_9aeab9a8 estimate
+# for Arrow core+parquet+compute+QuantLib, no AWS SDK).
+SIZE_BUDGET   ?= 83886080
+
+.PHONY: all build test ci sample clean shell help
 
 all: build
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+		awk 'begin {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: build-dev build-prod ## Build both dev and prod images
+# ---- Build the pybind11 extension .so (builder stage) ----
 
-build-dev: ## Build development image (with debug tools)
-	@echo "==> Building dev image..."
+build: ## Build the pybind11 .so extension (builder stage)
+	@echo "==> Building pybind11 extension..."
 	$(PODMAN_BUILD) \
-		--target dev \
-		-t $(IMAGE_NAME):dev \
+		--target builder \
+		-t $(IMAGE_NAME):builder \
 		--build-arg BUILD_TYPE=$(BUILD_TYPE)
-	@echo "==> Dev image ready: $(IMAGE_NAME):dev"
+	@echo "==> Builder image ready: $(IMAGE_NAME):builder"
+	@echo "==> Extracting .so..."
+	@$(PODMAN_RUN) $(IMAGE_NAME):builder cat /tmp/sum_columns.so > sum_columns.so 2>/dev/null || \
+		echo "==> WARNING: .so not found — check the builder stage"
+	@ls -lh sum_columns.so 2>/dev/null || true
 
-build-prod: ## Build production image (stripped, minimal)
-	@echo "==> Building prod image..."
+# ---- Cleanroom test (pure lambda/python:3.12 + .so + local parquet) ----
+
+test: ## Build + run the Lambda Python cleanroom test (test stage)
+	@echo "==> Building test image..."
 	$(PODMAN_BUILD) \
-		--target prod \
-		-t $(IMAGE_NAME):prod \
+		--target test \
+		-t $(IMAGE_NAME):test \
 		--build-arg BUILD_TYPE=$(BUILD_TYPE)
-	@echo "==> Prod image ready: $(IMAGE_NAME):prod"
+	@echo "==> Cleanroom test passed (built into the test stage)."
 
-test: build-dev ## Run local Lambda test via RIE (dev image)
-	@echo "==> Starting Lambda container (dev)..."
-	$(PODMAN_RUN) -d --name lambda-test \
+# ---- Full CI sequence: build → test → size budget ----
+
+ci: build test ## Full pipeline: build .so, run cleanroom test, check size budget
+	@echo "==> Checking size budget..."
+	@SIZE=$$(stat -c%s sum_columns.so 2>/dev/null || echo 0); \
+	if [ "$$SIZE" -gt $(SIZE_BUDGET) ]; then \
+		echo "FAIL: .so is $$SIZE bytes (budget: $(SIZE_BUDGET))"; \
+		exit 1; \
+	else \
+		echo "OK: .so is $$SIZE bytes (budget: $(SIZE_BUDGET))"; \
+	fi
+	@echo "==> CI PASS"
+
+# ---- RIE invocation (local Lambda emulator) ----
+
+run: test ## Start the test image via RIE and invoke the handler
+	@echo "==> Starting Lambda container (RIE)..."
+	-$(PODMAN) rm -f lambda-test 2>/dev/null
+	$(PODMAN) run -d --name lambda-test \
 		-p 9000:8080 \
-		-e AWS_LAMBDA_FUNCTION_TIMEOUT=30 \
-		-e AWS_LAMBDA_FUNCTION_MEMORY_SIZE=512 \
-		$(IMAGE_NAME):dev
+		$(IMAGE_NAME):test
 	@echo "==> Waiting for RIE..."
 	@sleep 3
 	@echo "==> Invoking handler..."
 	@curl -s -X POST http://localhost:9000/2015-03-31/functions/function/invocations \
 		-H "Content-Type: application/json" \
-		-d @events/test-event.json || true
+		-d '{"input": "test"}' || true
 	@echo ""
-	@echo "==> Stopping container..."
 	@$(PODMAN) stop lambda-test > /dev/null 2>&1 || true
 	@$(PODMAN) rm lambda-test > /dev/null 2>&1 || true
 	@echo "==> Done"
 
-test-prod: build-prod ## Test production image (smoke test only)
-	@echo "==> Starting Lambda container (prod)..."
-	$(PODMAN_RUN) -d --name lambda-test-prod \
-		-p 9001:8080 \
-		-e AWS_LAMBDA_FUNCTION_TIMEOUT=30 \
-		$(IMAGE_NAME):prod
-	@sleep 3
-	@echo "==> Invoking handler..."
-	@curl -s -X POST http://localhost:9001/2015-03-31/functions/function/invocations \
-		-H "Content-Type: application/json" \
-		-d @events/test-event.json || true
-	@echo ""
-	@$(PODMAN) stop lambda-test-prod > /dev/null 2>&1 || true
-	@$(PODMAN) rm lambda-test-prod > /dev/null 2>&1 || true
-	@echo "==> Done"
+# ---- Utilities ----
 
-shell: build-dev ## Drop into dev container shell
-	$(PODMAN_RUN) -it \
-		--entrypoint /bin/bash \
-		$(IMAGE_NAME):dev
+sample: ## Regenerate data/sample.parquet
+	python3 generate_sample.py
 
-debug: build-dev ## Start dev container in background for debugger attach
-	$(PODMAN) run -d --name lambda-debug \
-		-p 9000:8080 \
-		-e AWS_LAMBDA_FUNCTION_TIMEOUT=900 \
-		$(IMAGE_NAME):dev
-	@echo "==> Dev container running as 'lambda-debug'. Attach VSCode debugger now."
-	@echo "==> Invoke with: curl -X POST http://localhost:9000/2015-03-31/functions/function/invocations -H 'Content-Type: application/json' -d @events/test-event.json"
+shell: build ## Drop into the builder container shell
+	$(PODMAN_RUN) -it --entrypoint /bin/bash $(IMAGE_NAME):builder
 
-stop-debug: ## Stop the debug container
-	@$(PODMAN) stop lambda-debug > /dev/null 2>&1 || true
-	@$(PODMAN) rm lambda-debug > /dev/null 2>&1 || true
-	@echo "==> Debug container stopped"
+inspect: build ## Run ldd + readelf on the .so inside the builder
+	@echo "==> ldd:"; $(PODMAN_RUN) $(IMAGE_NAME):builder ldd /tmp/sum_columns.so 2>&1 || true
+	@echo "==> NEEDED:"; $(PODMAN_RUN) $(IMAGE_NAME):builder readelf -d /tmp/sum_columns.so 2>/dev/null | grep NEEDED || echo "(none)"
 
 clean: ## Remove images and clean build artifacts
 	@echo "==> Cleaning..."
-	$(PODMAN) rmi -f $(IMAGE_NAME):dev 2>/dev/null || true
-	$(PODMAN) rmi -f $(IMAGE_NAME):prod 2>/dev/null || true
+	$(PODMAN) rmi -f $(IMAGE_NAME):builder 2>/dev/null || true
+	$(PODMAN) rmi -f $(IMAGE_NAME):test 2>/dev/null || true
 	$(PODMAN) image prune -f 2>/dev/null || true
-	rm -rf CMakeUserPresets.json CMakeCache.txt compile_commands.json
+	rm -f sum_columns.so
 	@echo "==> Clean"

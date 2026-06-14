@@ -6,7 +6,7 @@ import pyarrow.parquet as pq
 import sum_columns as ext
 
 # Test 1: column sums (basic Arrow C Data Interface)
-table = pq.read_table("/var/task/data/sample.parquet")
+table = pq.read_table("data/sample.parquet")
 batch = table.to_batches()[0]
 sums = ext.sum_columns(batch)
 print("Column sums:", sums)
@@ -14,7 +14,7 @@ assert float(sums["col_0"]) == 15.0, f"col_0: {sums['col_0']}"
 assert float(sums["col_1"]) == 50.0, f"col_1: {sums['col_1']}"
 
 # Test 2: QuantLib option pricing from historical stock data
-prices_table = pq.read_table("/var/task/data/stock_prices.parquet")
+prices_table = pq.read_table("data/stock_prices.parquet")
 prices_batch = prices_table.to_batches()[0]
 print(f"Loaded {prices_table.num_rows} price rows")
 result = ext.price_options(prices_batch, risk_free_rate=0.05, maturity_days=30)
@@ -29,7 +29,7 @@ assert abs(result["put_delta"] + 0.5) < 0.25, f"ATM put delta ~-0.5, got {result
 assert abs(result["call_delta"] - result["put_delta"] - 1.0) < 0.01, "put-call parity delta"
 
 # Test 3: write results as parquet and verify
-output_path = "/tmp/option_results.parquet"
+output_path = "data/option_results.parquet"
 results_table = pa.table({
     "spot":       [result["spot"]],
     "volatility": [result["volatility"]],

@@ -1,6 +1,17 @@
 {
     // See https://github.com/vadimcn/vscode-lldb/blob/v1.9.2/MANUAL.md
     // for CodeLLDB launch configuration options.
+    //
+    // TWO debug flows in this workspace:
+    //   1. STANDALONE EXECUTABLES (files with main() in src/ or learn/)
+    //      → use "Debug active C++ file" / "Run active C++ file (no debug)"
+    //      → expects binary at build/<folder>/<basename>
+    //
+    //   2. PYBIND11 MODULES (src/sum_columns.cpp and similar — files with
+    //      PYBIND11_MODULE() macro)
+    //      → use "Debug pytest (sum_columns module)" / "Run pytest (no debug)"
+    //      → launches Python under LLDB so C++ breakpoints hit when Python
+    //        calls into the .so via the test suite
     "version": "0.2.0",
     "configurations": [
         {
@@ -28,6 +39,57 @@
             "noDebug": true,
             "sourceLanguages": [
                 "cpp"
+            ]
+        },
+        {
+            // For src/sum_columns.cpp and any future pybind11 modules.
+            // Launches Python under LLDB so breakpoints in the .cpp source
+            // hit when Python imports the .so and calls into it via pytest.
+            "name": "Debug pytest (sum_columns module)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "/var/lang/bin/python3.12",
+            "args": [
+                "-m",
+                "pytest",
+                "tests/",
+                "-v"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/build/Release:${workspaceFolder}",
+                "LD_LIBRARY_PATH": "/opt/gcc16/lib64:${env:LD_LIBRARY_PATH}"
+            },
+            "preLaunchTask": "build-sum-columns",
+            "sourceLanguages": [
+                "cpp",
+                "python"
+            ],
+            "initCommands": [
+                "settings set target.inherit-env true"
+            ]
+        },
+        {
+            "name": "Run pytest (no debug)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "/var/lang/bin/python3.12",
+            "args": [
+                "-m",
+                "pytest",
+                "tests/",
+                "-v"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/build/Release:${workspaceFolder}",
+                "LD_LIBRARY_PATH": "/opt/gcc16/lib64:${env:LD_LIBRARY_PATH}"
+            },
+            "preLaunchTask": "build-sum-columns",
+            "noDebug": true,
+            "sourceLanguages": [
+                "cpp",
+                "python"
             ]
         }
     ]

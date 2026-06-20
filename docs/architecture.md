@@ -82,7 +82,7 @@ graph LR
         EXPORT[conan export<br/>arrow + quantlib recipes]
         INSTALL[conan install<br/>--build=missing<br/>--mount=type=cache]
         BUILD[conan build<br/>→ .so]
-        STRIP[strip --strip-unneeded]
+        STRIP[strip --strip-unneeded<br/>for production deploy]
         
         BASE --> DNF --> GCC --> PIP --> EXPORT --> INSTALL --> BUILD --> STRIP
     end
@@ -105,6 +105,29 @@ graph LR
     style INSTALL fill:#69f,stroke:#333,stroke-width:2px
     style BUILD fill:#4a9,stroke:#333,stroke-width:2px
 ```
+
+### Dev vs Production Build Flags
+
+The `sum_columns.so` is built with **different flag sets** depending on
+context:
+
+| Flag | Local dev (build/Release/) | Production (Containerfile) |
+|------|----------------------------|----------------------------|
+| `-O3` | ✅ (preserved from Conan Release profile) | ✅ |
+| `-g` (compile) | ✅ (added via `target_compile_options`) | ✅ |
+| `-g` (link) | ✅ (added via `target_link_options`) | ✅ |
+| `-flto=auto` | ✅ (Conan toolchain) | ✅ |
+| `pybind11_strip` | ❌ disabled (no-op override) | n/a — Containerfile strips |
+| `strip --strip-unneeded` | ❌ skipped | ✅ explicit step |
+| Resulting `.so` size | ~60 MB (DWARF included) | ~42 MB (stripped) |
+
+**Why two paths**: local dev needs DWARF debug info for LLDB breakpoints to
+hit when pytest calls into the module. Production Lambda strips DWARF for
+cold-start size. `src/CMakeLists.txt` comments document all three
+compounding fixes required for this split to work (missing `-g` compile,
+missing `-g` link with LTO, pybind11 3.0 auto-strip override) — see
+[`docs/developer-guide.md`](./developer-guide.md) §"Debugging sum_columns.cpp"
+for the full case study.
 
 ## Conan Dependency Graph
 

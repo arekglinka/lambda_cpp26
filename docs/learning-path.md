@@ -492,6 +492,113 @@ hits, examine the call stack — you should see Python frames above the C++ fram
 where you paused. Use `py-bt` (if available) or the VSCode variables panel to
 inspect both Python and C++ state.
 
+### 7.6 C++ Breakpoint Debugging: Three Compounding Causes (Real Case Study)
+
+This case study captures the **three-hour debugging session** required to make
+C++ breakpoints actually hit when Python imported the `.so` under LLDB. The
+lesson: a single "missing debug info" symptom had three independent causes
+that all needed fixing before breakpoints worked. Each cause alone reproduced
+the same symptom.
+
+**Symptom**: User set a breakpoint on `Settings::instance().evaluationDate() = today;`
+(line 190 of `sum_columns.cpp`). Pressed F5. pytest ran, all tests passed,
+breakpoint never hit.
+
+**Diagnosis path**:
+1. Verified line 190 IS in the DWARF line table via `objdump --dwarf=decodedline`.
+2. Tested with gdb directly — breakpoint stayed PENDING.
+3. Tested with `PyInit_sum_columns` (function name) — that breakpoint HIT, proving
+   the .so was loaded and reachable.
+4. Discovered the gdb output showed the .so at `/workspaces/lambda_cpp26/sum_columns.so`
+   (project root) — NOT the freshly-built `build/Release/` version.
+
+**The three causes** (all fixed in commit `7668474`):
+
+1. **Missing `-g` on compile.** Conan's Release profile doesn't pass `-g`. Even
+   though `CMAKE_BUILD_TYPE=Release` allows it, the profile's flags omit it.
+   Fix: `target_compile_options(sum_columns PRIVATE -g)` — adds it for just
+   our TU; deps stay Release-stripped (multi-hour rebuild avoided).
+
+2. **Missing `-g` on link.** With `-flto=auto` (Conan's Release toolchain
+   default), GCC encapsulates debug info in `.gnu.debuglto_*` sections during
+   compile. The LTO link-time recompile must transform these into final
+   `.debug_*` sections — and that requires `-g` on the link command too. Without
+   it, LTO silently drops debug info even though the .o had it. Fix:
+   `target_link_options(sum_columns PRIVATE -g)`.
+
+3. **pybind11 3.0 auto-strip.** pybind11 2.x had a `PYBIND11_NO_STRIP` option;
+   3.0 removed it. Strip now runs whenever `CMAKE_BUILD_TYPE` isn't
+   DEBUG/RELWITHDEBINFO/NONE — no opt-out flag. The Makefile gets a literal
+   `/usr/bin/strip` post-build line. Fix: redefine `pybind11_strip` as a
+   no-op before calling `pybind11_add_module`:
+   ```cmake
+   function(pybind11_strip)
+   endfunction()
+   pybind11_add_module(sum_columns MODULE sum_columns.cpp)
+   ```
+
+**Verification commands** (use these when breakpoints don't hit):
+```bash
+# Check debug sections exist
+objdump -h build/Release/sum_columns.cpython-*.so | grep debug_
+
+# Check line table has the source line
+objdump --dwarf=decodedline build/Release/sum_columns.cpython-*.so | grep "sum_columns.cpp"
+
+# Check the .so Python actually loads
+python3.12 -c "import sum_columns; print(sum_columns.__file__)"
+```
+
+| Resource | Type | Specific Coverage | Link |
+|---|---|---|---|
+| **GCC -flto + debug info** | GCC docs | How LTO handles DWARF, why `-g` is needed at link | [gcc.gnu.org/onlinedocs/gcc/Optimize-Options](https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html) |
+| **pybind11 3.0 changelog** | Release notes | `PYBIND11_NO_STRIP` removed; strip gated on CMAKE_BUILD_TYPE | [pybind11 changelog](https://github.com/pybind/pybind11/releases) |
+| **Commit `7668474`** | Git history | The three-part fix with full reasoning | `git show 7668474` |
+| **`src/CMakeLists.txt`** | Source (this repo) | All three fixes inline + explanatory comments | [`src/CMakeLists.txt`](../src/CMakeLists.txt) |
+
+**Exercise**: Read `src/CMakeLists.txt` end-to-end. Identify each of the three
+debug-info fixes. For each, predict what would happen if you removed just that
+fix and rebuilt. (Hint: cause 3 alone produces a 42M .so; causes 1 or 2 alone
+produce a 60M .so without the right `.debug_*` sections.)
+
+### 7.7 Stale `.so` Shadowing (Operational Gotcha)
+
+Even with debug info correct, breakpoints may still fail silently if a stale
+`sum_columns.so` exists at the project root. Python's import resolution
+searches `PYTHONPATH` entries in order — and the launch config's PYTHONPATH is
+`${workspaceFolder}/build/Release:${workspaceFolder}`. A stray `sum_columns.so`
+at the project root matches `import sum_columns` BEFORE the build/Release
+copy is checked.
+
+**Diagnosis**:
+```bash
+ls -la /workspaces/lambda_cpp26/*.so 2>/dev/null
+python3.12 -c "import sum_columns; print(sum_columns.__file__)"
+```
+
+If the printed path ends in `/workspaces/lambda_cpp26/sum_columns.so` (project
+root, not `build/Release/`), delete it:
+```bash
+rm /workspaces/lambda_cpp26/sum_columns.so
+```
+
+**Where the stale file comes from**: most likely from an early `conan build .`
+run before the explicit `build/Release` layout was established. `*.so` is in
+`.gitignore` so it never gets committed — purely a local leftover.
+
+**Prevention pattern**: any time breakpoints silently fail to stop after a
+build-system change, run the diagnostic above FIRST. It's a one-liner that
+catches ~50% of "breakpoints don't work" reports.
+
+**Exercise**: Read `tests/conftest.py`. Trace the `find_extension()` function
+— it searches `build/Release`, `build/`, and `/var/task` but does NOT
+check the project root. So pytest via conftest.py finds the right .so. Why
+does Python's import system find the wrong one? (Answer: pytest runs the
+test file which uses the conftest-injected `ext` fixture, but VSCode's
+PYTHONPATH env var is what Python uses for the initial `import sum_columns`
+in conftest.py — and that includes `${workspaceFolder}` which has the stale
+file.)
+
 ---
 
 ## Resource Summary by Phase

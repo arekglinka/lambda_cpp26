@@ -63,6 +63,83 @@ If you pick "Debug active C++ file" while `sum_columns.cpp` is open, the
 preLaunchTask (`build-active-standalone-only`) detects `PYBIND11_MODULE(` in
 the source and fails with a clear error pointing to the right config.
 
+### Debugging `sum_columns.cpp` (pybind11 module) — end-to-end
+
+This section captures the **three compounding causes** that prevented C++
+breakpoints from hitting, and the **stale-.so operational gotcha** that
+re-appears if a build artifact lingers at the project root. If breakpoints
+ever silently fail to stop, walk this checklist.
+
+#### Three causes that prevented DWARF debug info in the .so
+
+`src/CMakeLists.txt` had to change in three places before LLDB could resolve
+breakpoints set in `sum_columns.cpp`:
+
+1. **Missing `-g` on the compile command.** `target_compile_options(sum_columns PRIVATE -g)`
+   adds it for just our TU; deps stay Release-stripped (avoids multi-hour
+   Conan rebuilds).
+
+2. **Missing `-g` on the link command.** With `-flto=auto` (Conan's Release
+   toolchain), GCC encapsulates debug info in `.gnu.debuglto_*` sections
+   during compile. The LTO link-time recompile then emits final `.debug_*`
+   sections — **but only if `-g` is on the link command too**. Without it,
+   LTO silently drops debug info even though the .o had it. Fixed via
+   `target_link_options(sum_columns PRIVATE -g)`.
+
+3. **pybind11 3.0 auto-strips the .so post-link.** pybind11 2.x had a
+   `PYBIND11_NO_STRIP` option; **3.0 removed it**. Strip now runs whenever
+   `CMAKE_BUILD_TYPE` isn't DEBUG/RELWITHDEBINFO/NONE — no opt-out flag.
+   The Makefile ends up with a literal `/usr/bin/strip` line. Fixed by
+   redefining `pybind11_strip` as a no-op before calling
+   `pybind11_add_module`:
+   ```cmake
+   function(pybind11_strip)
+   endfunction()
+   pybind11_add_module(sum_columns MODULE sum_columns.cpp)
+   ```
+
+**Production unaffected**: `Containerfile` line 77 runs
+`strip --strip-unneeded /tmp/sum_columns.so` so the deployed Lambda .so is
+stripped regardless. The local-dev .so grows 42M → 60M (extra DWARF).
+
+#### Stale `.so` at project root (recurring operational gotcha)
+
+If breakpoints ever silently fail to stop, **first check**:
+
+```bash
+ls -la /workspaces/lambda_cpp26/*.so 2>/dev/null
+```
+
+Anything there → delete it. The real .so lives ONLY at
+`build/Release/sum_columns.cpython-312-x86_64-linux-gnu.so`.
+
+**Why this happens**: Python's `import sum_columns` searches `PYTHONPATH`
+entries in order. The launch config's PYTHONPATH is
+`${workspaceFolder}/build/Release:${workspaceFolder}` — so a stray
+`sum_columns.so` at the project root matches the import and shadows the
+build/Release copy. Where does the stray come from? Likely from an early
+`conan build .` run before the explicit `build/Release` layout was
+established. `*.so` is in `.gitignore` so it never gets committed —
+purely a local leftover.
+
+#### End-to-end flow (verified working)
+
+1. Open `src/sum_columns.cpp` in the editor.
+2. Click the gutter on any line inside `price_options()` (e.g. line 190 —
+   the QuantLib `Settings::instance().evaluationDate() = today;` call).
+3. Pick **"Debug pytest (sum_columns module)"** in the Run & Debug dropdown.
+4. Press **F5**.
+
+The preLaunchTask (`build-sum-columns`) rebuilds the .so with debug info.
+Python launches under LLDB with `PYTHONPATH=build/Release:workspace`.
+pytest runs, calls `ext.price_options(...)`, and execution pauses at your
+breakpoint. The call stack shows both Python frames (above) and C++ frames
+(below) — full mixed-language debugging.
+
+**Verified working**: `pybind11_init_sum_columns(pybind11::module_&)::{lambda(...)#
+1}::operator()(...)` resolves correctly with argument values visible
+(`risk_free_rate=0.05, maturity_days=30, table_like=...`).
+
 ---
 
 ## Sanitizers

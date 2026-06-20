@@ -42,6 +42,19 @@
             }
         },
         {
+            "label": "build-active-standalone-only",
+            "detail": "Pre-launch build for standalone-executable launch configs; errors clearly if active file is a pybind11 module",
+            "type": "shell",
+            "command": "if grep -q 'PYBIND11_MODULE(' \"${file}\"; then echo ''; echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'; echo ''; echo '  ${relativeFile} is a pybind11 Python module, not a standalone executable.'; echo '  It builds to a .so that Python imports — there is no binary to launch.'; echo ''; echo '  To debug it, switch the launch config:'; echo '    1. Open Run & Debug panel (Ctrl+Shift+D)'; echo '    2. Click the dropdown at the top (currently shows this config name)'; echo '    3. Pick: \"Debug pytest (sum_columns module)\"'; echo '    4. Press F5'; echo ''; echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'; echo ''; exit 1; fi && ./learn/build.sh '${relativeFile}'",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
             "label": "build-sum-columns",
             "detail": "Rebuild the pybind11 .so via Conan's CMake (incremental)",
             "type": "shell",

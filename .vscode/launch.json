@@ -21,7 +21,7 @@
             "program": "${workspaceFolder}/build/${relativeFileDirname}/${fileBasenameNoExtension}",
             "args": [],
             "cwd": "${fileDirname}",
-            "preLaunchTask": "build-active-cpp",
+            "preLaunchTask": "build-active-standalone-only",
             "sourceLanguages": [
                 "cpp"
             ]
@@ -35,7 +35,7 @@
             "program": "${workspaceFolder}/build/${relativeFileDirname}/${fileBasenameNoExtension}",
             "args": [],
             "cwd": "${fileDirname}",
-            "preLaunchTask": "build-active-cpp",
+            "preLaunchTask": "build-active-standalone-only",
             "noDebug": true,
             "sourceLanguages": [
                 "cpp"

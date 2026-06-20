@@ -9,9 +9,10 @@
 #   - public.ecr.aws/lambda/python:3.12 base (Lambda runtime ABI match)
 #   - System build tools (dnf install — see docs/session-timeline.md Q25/Q26
 #     for why diffutils + perl-FindBin are non-optional on AL2023)
-#   - GCC 16.1.0 built from source at /opt/gcc16 (see docs Q21 — sets
-#     ENV CFLAGS=-std=gnu11 -fgnu89-inline globally because transitive
-#     deps use K&R C function declarations)
+#   - GCC 16.1.0 built from source at /opt/gcc16 (the build runs WITHOUT
+#     CFLAGS so the bootstrap compiler doesn't choke on GCC's own sources;
+#     ENV CFLAGS=-std=gnu17 is set AFTER the build for transitive deps
+#     that still use K&R C function declarations — see docs/session-timeline.md Q21)
 #   - Conan 2 + cmake >= 3.28 + ninja >= 1.11 via pip (NOT Conan tool_requires
 #     — see docs/session-timeline.md Q22 for why tool_requires don't propagate
 #     to transitive deps in Conan 2.x)

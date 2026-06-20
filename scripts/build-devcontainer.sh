@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 #
+# DEPRECATED — replaced by .github/workflows/devcontainer.yml (4-job parallel
+# pipeline using Containerfile.gcc-base + Containerfile.arrow-deps +
+# Containerfile.quantlib-deps + .devcontainer/Dockerfile). Kept for historical
+# reference; do not use for new builds — the single-job flow exceeds GH Actions
+# timeouts on cold cache (~90 min vs 75-min cap).
+#
 # Build the devcontainer image from .devcontainer/Dockerfile and bake in the
 # Conan dependency cache + project build (the equivalent of postCreateCommand,
 # but committed into the image so teammates can pull instead of rebuild).

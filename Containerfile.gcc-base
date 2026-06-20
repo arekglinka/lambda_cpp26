@@ -1,0 +1,71 @@
+# Containerfile.gcc-base
+# =============================================================================
+# Shared foundation for both dev (.devcontainer/Dockerfile) and prod
+# (Containerfile.base) image variants. Built by the gcc-base job in
+# .github/workflows/devcontainer.yml, cached on ghcr.io by content hash of
+# THIS FILE.
+#
+# Contains:
+#   - public.ecr.aws/lambda/python:3.12 base (Lambda runtime ABI match)
+#   - System build tools (dnf install — see docs/session-timeline.md Q25/Q26
+#     for why diffutils + perl-FindBin are non-optional on AL2023)
+#   - GCC 16.1.0 built from source at /opt/gcc16 (see docs Q21 — sets
+#     ENV CFLAGS=-std=gnu11 -fgnu89-inline globally because transitive
+#     deps use K&R C function declarations)
+#   - Conan 2 + cmake >= 3.28 + ninja >= 1.11 via pip (NOT Conan tool_requires
+#     — see docs/session-timeline.md Q22 for why tool_requires don't propagate
+#     to transitive deps in Conan 2.x)
+#   - Conan remote + recipe exports for arrow + quantlib (no binaries built)
+#
+# Does NOT contain:
+#   - Compiled Arrow/QuantLib binaries (built in Containerfile.arrow-deps /
+#     Containerfile.quantlib-deps so they can cache independently)
+#   - Dev-only tools: gdb, valgrind, clang-tools-extra, pyarrow, pytest,
+#     clangd >= 19 (added in the dev final stage)
+# =============================================================================
+FROM public.ecr.aws/lambda/python:3.12
+
+ARG GCC_VERSION=16.1.0
+
+RUN dnf install -y \
+        gcc gcc-c++ binutils git python3.12-devel \
+        tar xz bzip2 ca-certificates ncurses-devel which curl-devel \
+        gmp-devel mpfr-devel libmpc-devel isl-devel \
+        bison flex texinfo wget diffutils \
+        perl perl-FindBin \
+        zlib-devel openssl-devel \
+    && dnf clean all
+
+# Global CFLAGS: AL2023 ships with K&R-C-era transitive deps (termcap etc.)
+# that GCC 16 rejects by default. Must be ENV (not Conan profile cflags)
+# because Conan profile cflags don't propagate to CMake-based transitive deps.
+ENV CFLAGS="-std=gnu11 -fgnu89-inline"
+ENV CXXFLAGS=""
+
+RUN mkdir -p /tmp/gcc && cd /tmp/gcc && \
+    curl -sL "https://gcc.gnu.org/pub/gcc/releases/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" | \
+    tar xJ --strip-components=1 && \
+    ./contrib/download_prerequisites && mkdir build && cd build && \
+    ../configure --prefix=/opt/gcc16 \
+        --enable-languages=c,c++ --disable-multilib \
+        --disable-bootstrap --disable-nls --enable-checking=release && \
+    make -j"$(nproc)" && make install && rm -rf /tmp/gcc
+
+ENV CC=/opt/gcc16/bin/gcc
+ENV CXX=/opt/gcc16/bin/g++
+ENV PATH="/opt/gcc16/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/gcc16/lib64:${LD_LIBRARY_PATH}"
+
+RUN pip3.12 install --no-cache-dir \
+        "conan>=2.4" "cmake>=3.28" "ninja>=1.11" "pybind11>=2.13"
+
+WORKDIR /workspace
+
+COPY profiles/   /tmp/conan-profiles/
+COPY recipes/    /tmp/recipes/
+COPY conanfile.py /tmp/conanfile.py
+
+RUN conan remote add conancenter https://center2.conan.io --force 2>/dev/null || true && \
+    conan export /tmp/recipes/arrow && \
+    conan export /tmp/recipes/quantlib && \
+    conan profile detect 2>/dev/null || true

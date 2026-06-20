@@ -267,47 +267,114 @@ while inheriting the toolchain and dep cache.
 ## DevContainer Image Publishing
 
 ```mermaid
-graph LR
+graph TB
     subgraph "Triggers"
-        PUSH[Push to main<br/>touching .devcontainer/,<br/>recipes/, src/, conanfile.py]
+        PUSH[Push to main<br/>touching .devcontainer/, recipes/,<br/>profiles/, src/, conanfile.py,<br/>Containerfile.*]
         CRON[Weekly cron<br/>Sun 03:00 UTC]
         MANUAL[workflow_dispatch]
     end
     
-    subgraph "CI Workflow: devcontainer.yml"
-        AUTH[podman login ghcr.io<br/>with GITHUB_TOKEN]
-        BUILD[podman build<br/>.devcontainer/Dockerfile<br/>~30 min]
-        PREP[podman run --entrypoint '[]'<br/>conan install + build<br/>~5-10 min]
-        COMMIT[podman commit<br/>→ image with baked cache]
-        TAG3[Tag :sha :latest<br/>:dev-YYYYMMDD]
-        PUSH3[podman push ×3]
+    subgraph "Job 1: gcc-base (cacheable)"
+        GH[Hash of<br/>Containerfile.gcc-base]
+        GPULL[podman pull<br/>gcc-base:HASH]
+        GSKIP{Hit?}
+        GBUILD[podman build Containerfile.gcc-base<br/>GCC 16 from source<br/>~25 min cold]
         
-        AUTH --> BUILD --> PREP --> COMMIT --> TAG3 --> PUSH3
+        GH --> GPULL --> GSKIP
+        GSKIP -->|hit| GDONE[cached]
+        GSKIP -->|miss| GBUILD --> GDONE
     end
     
-    subgraph "Local Push (known-good state)"
-        RUN[Container running<br/>with fixes applied]
-        LCOMMIT[podman commit]
-        LPUSH[push-devcontainer.sh<br/>push to ghcr.io]
+    subgraph "Job 2: arrow-deps (parallel, cacheable)"
+        AH[Hash of recipes/arrow/*<br/>+ profile + conanfile<br/>+ gcc-base tag]
+        APULL[podman pull<br/>arrow-deps:HASH]
+        ASKIP{Hit?}
+        ABUILD[podman build Containerfile.arrow-deps<br/>FROM gcc-base<br/>conan install arrow/*<br/>~25 min cold]
         
-        RUN --> LCOMMIT --> LPUSH
+        AH --> APULL --> ASKIP
+        ASKIP -->|hit| ADONE[cached]
+        ASKIP -->|miss| ABUILD --> ADONE
     end
     
-    PUSH --> AUTH
-    CRON --> AUTH
-    MANUAL --> AUTH
+    subgraph "Job 3: quantlib-deps (parallel, cacheable)"
+        QH[Hash of recipes/quantlib/*<br/>+ profile + conanfile<br/>+ gcc-base tag]
+        QPULL[podman pull<br/>quantlib-deps:HASH]
+        QSKIP{Hit?}
+        QBUILD[podman build Containerfile.quantlib-deps<br/>FROM gcc-base<br/>conan install quantlib/*<br/>~25 min cold]
+        
+        QH --> QPULL --> QSKIP
+        QSKIP -->|hit| QDONE[cached]
+        QSKIP -->|miss| QBUILD --> QDONE
+    end
     
-    style BUILD fill:#f96,stroke:#333,stroke-width:2px
-    style COMMIT fill:#4a9,stroke:#333,stroke-width:2px
-    style PUSH3 fill:#4a9,stroke:#333
-    style LPUSH fill:#69f,stroke:#333
+    subgraph "Job 4: assemble-devcontainer (always rebuilds)"
+        ASMULTI[multi-stage FROM all 3<br/>--mount=type=bind merge caches]
+        ATOOLS[dnf install gdb valgrind<br/>pip install pyarrow pytest clangd]
+        ACHECK[conan list arrow/* + quantlib/*<br/>sanity check]
+        ATAGS[Tag :sha :latest :dev-YYYYMMDD]
+        APUSH[podman push x3]
+        
+        ASMULTI --> ATOOLS --> ACHECK --> ATAGS --> APUSH
+    end
+    
+    PUSH --> GH
+    CRON --> GH
+    MANUAL --> GH
+    
+    GDONE --> AH
+    GDONE --> QH
+    ADONE --> ASMULTI
+    QDONE --> ASMULTI
+    
+    style GBUILD fill:#f96,stroke:#333,stroke-width:2px
+    style ABUILD fill:#f96,stroke:#333,stroke-width:2px
+    style QBUILD fill:#f96,stroke:#333,stroke-width:2px
+    style ASMULTI fill:#4a9,stroke:#333,stroke-width:2px
+    style APUSH fill:#4a9,stroke:#333
 ```
 
-**Two publish paths**:
-- **CI (clean)**: `scripts/build-devcontainer.sh` rebuilds from Dockerfile, bakes
-  Conan cache, commits, pushes — used by `devcontainer.yml` workflow on changes
-- **Local (fast)**: `scripts/push-devcontainer.sh` commits the CURRENTLY RUNNING
-  container (with whatever fixes applied) and pushes — for immediate sharing
+**Why four jobs (parallel + cached)**: the original single-job pipeline was
+~90 min serial (GCC + Arrow + QuantLib) and exceeded GitHub Actions' 75-min
+timeout. Splitting into cacheable layers means:
+
+| Scenario | Time |
+|---|---|
+| All cache hit | ~5 min (just assemble) |
+| GCC base cache hit, both deps miss | ~30 min (parallel deps + assemble) |
+| Full cold cache | ~55 min (gcc 25 + parallel[arrow 25 ‖ quantlib 25] + assemble 5) |
+| Single recipe change (e.g. quantlib only) | ~30 min (just quantlib rebuilds + assemble) |
+
+**Cache keys** (content hashes on ghcr.io image tags):
+- `gcc-base:<hash of Containerfile.gcc-base>`
+- `arrow-deps:<hash of recipes/arrow/* + profiles/al2023 + conanfile.py + gcc-base tag>`
+- `quantlib-deps:<hash of recipes/quantlib/* + profiles/al2023 + conanfile.py + gcc-base tag>`
+
+Including the gcc-base tag in arrow/quantlib hashes ensures a gcc-base
+rebuild cascades to both dep rebuilds (different hash → cache miss).
+
+**`--mount=type=bind` for cache merge**: the assemble stage uses BuildKit
+syntax to mount arrow-cache and quantlib-cache read-only DURING a single
+RUN command that does `cp -rn` (no-clobber) merges. This avoids ~8 GB of
+intermediate COPY layers in the final image. Conan cache paths are
+deterministic from `package_id`, so identical packages (boost built by
+both stages) live at the same path and the merge is idempotent.
+
+**Why not GitHub Packages as a Conan remote**: GitHub Packages (npm/nuget/maven/OCI)
+does not implement Conan's REST API v2. Only GitLab has native Conan 2
+registry support among forge platforms. The container-image-based caching
+above achieves the same effect (cache binaries, reuse across CI runs, allow
+local `podman pull`) without external infrastructure.
+
+**Local pull** of intermediate images for custom builds:
+```bash
+podman pull ghcr.io/arekglinka/lambda_cpp26-gcc-base:latest
+podman pull ghcr.io/arekglinka/lambda_cpp26-arrow-deps:latest
+podman pull ghcr.io/arekglinka/lambda_cpp26-quantlib-deps:latest
+```
+
+**Local (fast) push** for sharing a known-good container state:
+`scripts/push-devcontainer.sh` still works — commits the currently running
+devcontainer and pushes to ghcr.io. Useful for hot-fix shares.
 
 **Auth note**: CI uses `GITHUB_TOKEN` (auto-scoped with `packages:write`).
 Local pushes need `gh auth refresh --scopes write:packages,read:packages`
@@ -315,6 +382,9 @@ Local pushes need `gh auth refresh --scopes write:packages,read:packages`
 
 **Tarball alternative**: `scripts/save-devcontainer-tarball.sh` exports to
 `.tar.gz + .sha256` for airgapped / shared-drive distribution.
+
+**Deprecated**: `scripts/build-devcontainer.sh` was the single-job build
+script replaced by the parallel workflow. Kept for historical reference.
 
 ## CI/CD Pipelines
 
@@ -335,13 +405,17 @@ graph LR
         TAG_VER --> RELEASE[GitHub Release<br/>with .so asset]
     end
     
-    subgraph "DevContainer Pipeline (devcontainer.yml)"
+    subgraph "DevContainer Pipeline (devcontainer.yml) — parallel + cached"
         DEV2[Push to main<br/>touching dev files]
         CRON2[Weekly cron]
         
-        DEV2 --> BUILD2[Build + bake deps<br/>+ commit + push]
-        CRON2 --> BUILD2
-        BUILD2 --> DEVTAGS[Tag :sha :latest<br/>:dev-YYYYMMDD]
+        DEV2 --> J1[Job 1: gcc-base<br/>cached by Containerfile.gcc-base hash]
+        CRON2 --> J1
+        J1 --> J2A[Job 2: arrow-deps<br/>cached by arrow recipe hash]
+        J1 --> J2B[Job 3: quantlib-deps<br/>cached by quantlib recipe hash]
+        J2A --> J3[Job 4: assemble<br/>merge caches + dev tools<br/>~5 min always]
+        J2B --> J3
+        J3 --> DEVTAGS[Tag :sha :latest<br/>:dev-YYYYMMDD]
         DEVTAGS --> DEVPUSH[Push dev image<br/>to ghcr.io]
     end
     

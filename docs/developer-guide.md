@@ -422,8 +422,43 @@ points `clangd.path` at it.
 Also ensure cpptools isn't conflicting with clangd:
 ```json
 // .vscode/settings.json
-"C_Cpp.intelliSenseEngine": "Disabled"
+"C_Cpp.intelliSenseEngine": "Disabled",
+"C_Cpp.errorSquiggles": "disabled",
+"C_Cpp.dimInactiveRegions": false
 ```
+
+`intelliSenseEngine: Disabled` alone is **not sufficient** — cpptools keeps
+an independent `errorSquiggles` flag (default `"enabled"`) that still scans
+`#include` lines and renders red on unresolved ones. The result is every
+`#include` line glowing red even though clangd (the active engine) resolves
+them all. Always set `errorSquiggles: "disabled"` too. After editing, run
+`Ctrl+Shift+P` → `Developer: Reload Window` — cpptools reads these at
+activation only.
+
+To verify which extension produces a given squiggle, hover over it: the
+tooltip's bottom-right names the source ("clangd" vs "C/C++ extension"). To
+verify clangd's view directly, run `clangd --check=<file>` from the
+container terminal — a healthy run ends with `All checks completed, N
+errors` where N counts code-action tweak failures, not header diagnostics.
+
+### First-time workspace setup after checkout
+
+When opening the project for the first time (fresh `git clone`, or after
+switching to the local-snapshot devcontainer config), `build/Release/`
+does not exist and clangd/pytest have nothing to read. The
+[`scripts/bootstrap-workspace.sh`](../scripts/bootstrap-workspace.sh)
+script handles this:
+
+```bash
+./scripts/bootstrap-workspace.sh           # inside the devcontainer terminal
+```
+
+It runs `conan install + build`, verifies outputs (`compile_commands.json`
++ `.so`), and smoke-tests pytest. Idempotent — safe to re-run any time.
+
+For the local-snapshot devcontainer workflow specifically (using a pulled
+copy of a running devcontainer instead of building or pulling from ghcr.io),
+see [`devcontainer-snapshot.md`](devcontainer-snapshot.md).
 
 ### VSCode build & run shortcuts
 

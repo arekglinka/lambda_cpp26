@@ -1,45 +1,70 @@
-FROM public.ecr.aws/lambda/python:3.12
+# .devcontainer/Dockerfile (multi-stage assembled)
+# =============================================================================
+# Final dev container — assembled from three cached intermediate images on
+# ghcr.io. This file is used by BOTH:
+#
+#   1. VSCode "Reopen in Container" with .devcontainer/devcontainer.json
+#      (build config — VSCode invokes `docker/podman build -f Dockerfile ..`)
+#
+#   2. CI: .github/workflows/devcontainer.yml's assemble-devcontainer job
+#
+# Build time: ~5 min (cache merges + dev tools). All the heavy lifting
+# (GCC compile, Arrow compile, QuantLib compile) is done in the cached
+# intermediate images.
+#
+# Build args (all optional — default to :latest):
+#   GCC_TAG       — tag of lambda_cpp26-gcc-base to use
+#   ARROW_TAG     — tag of lambda_cpp26-arrow-deps to use
+#   QUANTLIB_TAG  — tag of lambda_cpp26-quantlib-deps to use
+#   REGISTRY_OWNER — ghcr.io owner (default: arekglinka)
+#
+# To override for local testing:
+#   podman build -f .devcontainer/Dockerfile \
+#     --build-arg GCC_TAG=test --build-arg ARROW_TAG=test \
+#     --build-arg QUANTLIB_TAG=test -t lambda_cpp26-dev:test ..
+# =============================================================================
 
-ARG GCC_VERSION=16.1.0
+# syntax=docker/dockerfile:1.6  — enables BuildKit --mount=type=bind in RUN.
+# Without this, two COPY --from layers would add ~8 GB of intermediate bloat
+# to the final image (one full copy of arrow's cache, one of quantlib's).
+# --mount=type=bind mounts the source stages read-only DURING the RUN instead,
+# so only the merged result ends up in the final layer.
 
+ARG REGISTRY_OWNER=arekglinka
+ARG GCC_TAG=latest
+ARG ARROW_TAG=latest
+ARG QUANTLIB_TAG=latest
+
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-arrow-deps:${ARROW_TAG} AS arrow-cache
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-quantlib-deps:${QUANTLIB_TAG} AS quantlib-cache
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-gcc-base:${GCC_TAG}
+
+# Merge Conan caches from both dep stages into /root/.conan2 in a SINGLE layer.
+# --mount=type=bind: source stages mounted read-only at /tmp/* during the RUN.
+# Conan cache paths are deterministic from package_id, so identical packages
+# (e.g. boost built by both stages) live at the same path; cp -rn (no-clobber)
+# keeps the first copy and skips duplicates — safe.
+RUN --mount=type=bind,from=arrow-cache,source=/root/.conan2,target=/tmp/arrow-conan \
+    --mount=type=bind,from=quantlib-cache,source=/root/.conan2,target=/tmp/ql-conan \
+    cp -rn /tmp/arrow-conan/. /root/.conan2/ && \
+    cp -rn /tmp/ql-conan/.    /root/.conan2/
+
+# Dev-only packages (NOT in gcc-base because prod doesn't need them).
+# clang-tools-extra pulls clang-format/clang-tidy (system clangd 15.x is
+# superseded by the pip-installed clangd 22 below).
 RUN dnf install -y \
-        gcc gcc-c++ binutils cmake ninja-build git \
-        python3.12-devel \
-        tar xz bzip2 ca-certificates ncurses-devel which curl-devel \
-        gmp-devel mpfr-devel libmpc-devel isl-devel \
-        bison flex texinfo wget diffutils \
-        perl perl-FindBin \
-        zlib-devel openssl-devel \
         clang-tools-extra gdb valgrind \
     && dnf clean all
 
-RUN mkdir -p /tmp/gcc && cd /tmp/gcc && \
-    curl -sL "https://gcc.gnu.org/pub/gcc/releases/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" | \
-    tar xJ --strip-components=1 && \
-    ./contrib/download_prerequisites && mkdir build && cd build && \
-    ../configure --prefix=/opt/gcc16 \
-        --enable-languages=c,c++ --disable-multilib \
-        --disable-bootstrap --disable-nls --enable-checking=release && \
-    make -j"$(nproc)" && make install && rm -rf /tmp/gcc
-
-ENV CC=/opt/gcc16/bin/gcc
-ENV CXX=/opt/gcc16/bin/g++
-ENV PATH="/opt/gcc16/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/opt/gcc16/lib64:${LD_LIBRARY_PATH}"
-ENV CFLAGS="-std=gnu17"
-ENV CXXFLAGS=""
-
 RUN pip3.12 install --no-cache-dir \
-    "conan>=2.4" "cmake>=3.28" "ninja>=1.11" \
-    "pybind11>=2.13" "pyarrow>=15.0" "pytest>=8.0" \
-    "clangd>=19"
+        "pyarrow>=15.0" "pytest>=8.0" "clangd>=19"
+
+# Sanity: both libraries must be in the merged cache. Fails fast if a stage
+# produced an empty cache (typical cause: ghcr.io pull fell back to a stale tag).
+RUN conan list 'arrow/*'    --cache && \
+    conan list 'quantlib/*' --cache
 
 WORKDIR /workspace
 
-COPY profiles/ /tmp/conan-profiles/
-COPY recipes/ /tmp/recipes/
-
-RUN conan remote add conancenter https://center2.conan.io --force 2>/dev/null || true && \
-    conan export /tmp/recipes/arrow && \
-    conan export /tmp/recipes/quantlib && \
-    conan profile detect 2>/dev/null || true
+# VSCode overrides CMD at runtime; this is just a default for `podman run`.
+CMD ["sleep", "infinity"]

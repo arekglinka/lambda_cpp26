@@ -1,0 +1,33 @@
+# Containerfile.arrow-deps
+# =============================================================================
+# Builds ONLY Apache Arrow 18.0.0 (+ its transitive deps) into the Conan cache.
+# Output image's /root/.conan2 contains the arrow recipe + compiled binaries.
+#
+# Cache key (in devcontainer.yml): hash of recipes/arrow/* + profiles/al2023 +
+# conanfile.py + the gcc-base tag. Any arrow recipe change rebuilds this image
+# but leaves quantlib-deps and gcc-base untouched.
+#
+# No --mount=type=cache here: we WANT the binaries baked into the image layer
+# so the assembled dev/prod image can COPY them in. Cache reuse across CI runs
+# happens via the content-hash image tagging on ghcr.io, not BuildKit cache mounts.
+# =============================================================================
+ARG REGISTRY_OWNER=arekglinka
+ARG GCC_TAG=latest
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-gcc-base:${GCC_TAG}
+
+COPY recipes/arrow/   /tmp/recipes/arrow/
+COPY profiles/al2023  /tmp/conan-profiles/al2023
+COPY conanfile.py     /tmp/conanfile.py
+
+WORKDIR /tmp
+
+# `conan remove` before `conan export` to invalidate stale recipe revisions
+# inherited from gcc-base's recipe export step (see docs/learning-path.md Q47).
+RUN conan remove 'arrow/*' --force 2>/dev/null || true && \
+    conan export /tmp/recipes/arrow && \
+    conan install "arrow/18.0.0" \
+        --build=missing \
+        -pr:h /tmp/conan-profiles/al2023 \
+        -pr:b /tmp/conan-profiles/al2023 \
+        -s:h build_type=Release && \
+    conan list 'arrow/*' --cache

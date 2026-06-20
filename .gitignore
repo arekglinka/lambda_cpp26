@@ -37,6 +37,9 @@ learn/compile_flags.txt
 # Devcontainer tarball distribution artifacts
 *.tar.sha256
 
+# Local-only devcontainer (uses pre-pulled podman snapshot)
+.devcontainer/local-snapshot/
+
 # Python
 __pycache__/
 *.pyc

@@ -1,8 +1,9 @@
 {
-    "docker.dockerPath": "podman",
-    "docker.host": "unix:///run/podman/podman.sock",
-    "remote.containers.dockerPath": "podman",
+    "dev.containers.dockerPath": "podman",
+    "dev.containers.dockerSocketPath": "/run/user/1000/podman/podman.sock",
     "C_Cpp.intelliSenseEngine": "Disabled",
+    "C_Cpp.errorSquiggles": "disabled",
+    "C_Cpp.dimInactiveRegions": false,
     "clangd.arguments": [
         "--compile-commands-dir=${workspaceFolder}/build/Release",
         "--query-driver=/opt/gcc16/bin/g++",

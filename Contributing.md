@@ -46,6 +46,25 @@ make test  # build + run test stage only
 make run   # start RIE + curl invoke (local Lambda emulator)
 ```
 
+### Option D: Local snapshot devcontainer (fastest cold start)
+
+Skip both the 30-min GCC build *and* the registry pull by importing a
+running devcontainer from another machine that already has it. Useful for
+pairing, offline work, or iterating on the Dockerfile/recipes without
+publishing to ghcr.io.
+
+```bash
+# On the target machine — pulls a running container from the source host
+# via streaming podman export | podman import:
+~/wsp/agutil/pull-devcontainer.sh <container-name-on-source>
+
+# Then open the project in VSCode and pick "lambda-cpp26 (local snapshot)"
+# from the devcontainer picker. Inside the container terminal:
+./scripts/bootstrap-workspace.sh
+```
+
+Full details: [`docs/devcontainer-snapshot.md`](docs/devcontainer-snapshot.md).
+
 ## Build System
 
 ### The Containerfile (two stages)

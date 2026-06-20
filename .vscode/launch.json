@@ -66,7 +66,8 @@
                 "python"
             ],
             "initCommands": [
-                "settings set target.inherit-env true"
+                "settings set target.inherit-env true",
+                "settings set target.disable-aslr false"
             ]
         },
         {

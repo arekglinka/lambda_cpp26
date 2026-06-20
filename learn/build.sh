@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
+cd "$PROJECT_DIR"
+
 DEV_LIB="$PROJECT_DIR/build/learn/libdev_lib.so"
 
 if [ ! -f "$DEV_LIB" ]; then
@@ -30,19 +32,38 @@ for d in /root/.conan2/p/b/*/p; do
     [ -d "$d/include" ] && INCLUDE_DIRS="$INCLUDE_DIRS -I$d/include"
 done
 
+# Accept: bare filename (backward compat, assumed in learn/),
+# relative path from project root (e.g. src/foo.cpp), or absolute path.
 SRC="${1:-t1.cpp}"
-OUT_NAME=$(basename "${SRC%.cpp}")
-OUT="$PROJECT_DIR/build/learn/$OUT_NAME"
+if [[ ! -f "$SRC" ]]; then
+    if [[ -f "learn/$SRC" ]]; then
+        SRC="learn/$SRC"
+    else
+        echo "ERROR: '$SRC' not found (looked in cwd and learn/)" >&2
+        exit 1
+    fi
+fi
+
+# Output preserves the source's folder structure so learn/t1 and src/t1
+# don't clobber each other: build/learn/t1, build/src/t1, etc.
+SRC_REL_DIR="$(dirname "$SRC")"
+[[ "$SRC_REL_DIR" == "." ]] && SRC_REL_DIR="learn"
+OUT_NAME="$(basename "${SRC%.cpp}")"
+OUT_DIR="$PROJECT_DIR/build/$SRC_REL_DIR"
+OUT="$OUT_DIR/$OUT_NAME"
+mkdir -p "$OUT_DIR"
 
 /opt/gcc16/bin/g++ -std=c++26 -O0 -g \
     $INCLUDE_DIRS \
-    "$SCRIPT_DIR/$SRC" \
+    "$PROJECT_DIR/$SRC" \
     -L"$(dirname "$DEV_LIB")" -ldev_lib \
     -Wl,-rpath,"$(dirname "$DEV_LIB")" \
     -o "$OUT"
 
 echo "Built: $OUT"
 
+# Refresh compile_flags.txt so clangd picks up new include dirs if the
+# Conan cache layout changed (e.g. after a recipe edit + conan install).
 {
     echo "-std=c++26"
     echo "-I/opt/gcc16/include/c++/16.1.0"

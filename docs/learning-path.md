@@ -254,8 +254,6 @@ Before touching QuantLib, you need the math.
 >
 > **Time estimate**: 30–40 hours.
 
-### 6.1 Putting It All Together
-
 At this point you've studied all the individual pieces. Now connect them.
 
 | Resource | Type | Specific Coverage | Link |
@@ -292,6 +290,207 @@ At this point you've studied all the individual pieces. Now connect them.
 - **Q30** — the build-debug waterfall pattern. Understanding this proves you've lived through real builds.
 - **Q20** — the pushback questions. A strong candidate asks these before starting.
 - **Q19** — confidence ratings with reasoning. Shows calibrated judgment.
+
+---
+
+## Phase 7 — DevContainer Operations & Tooling Case Studies (Week 8)
+
+> **Audience expansion**: This phase covers operational patterns every contributor hits when joining the project — Podman setup, prebuilt image workflow, IDE configuration, mixed-language debugging. Pair with [`developer-guide.md`](./developer-guide.md).
+>
+> **Time estimate**: 10–15 hours (read + reproduce each case study).
+
+### 7.1 Podman + WSL2 DevContainer Setup
+
+The project's devcontainer runs under Podman (not Docker) on WSL2. Canonical
+setup is automated by [`setup-podman-wsl.sh`](../setup-podman-wsl.sh).
+
+| Resource | Type | Specific Coverage | Link |
+|---|---|---|---|
+| **`setup-podman-wsl.sh`** | Script (this repo) | Ubuntu rootful Podman + systemd enable + VSCode Machine settings. Idempotent. | [`setup-podman-wsl.sh`](../setup-podman-wsl.sh) |
+| **Conan 2.x CLI gotchas** | Internal notes | `-f` is `--format`, not `--force`. `conan remove` doesn't prompt. `conan export` creates new recipe revision. | (this phase) |
+| **WSL2 .wslconfig** | Config reference | GCC 16 source compile needs ~12 GB RAM. Default WSL2 caps at 50% of host RAM. | (this phase) |
+
+**Case study — Podman path differs from Docker**:
+The devcontainer.json's `remoteUser: "root"` works with rootful Podman (container
+root maps to host root, no permission issues on bind mounts). Under rootless
+Podman, the same config produces permission errors because container root maps
+to a non-root host UID. The setup script detects and warns about this.
+
+**Exercise**: Read `setup-podman-wsl.sh`. Explain why it writes to TWO
+`settings.json` locations — `~/.vscode-server/data/Machine/settings.json`
+(WSL-side Machine scope) AND workspace `.vscode/settings.json`.
+
+### 7.2 Conan 2.x CMakeDeps Multi-Component Bug (Real Case Study)
+
+This is the kind of build-system bug that distinguishes "ran the tutorial"
+from "shipped a project". Read it in full.
+
+**Symptom**: Consumer's `find_package(Arrow REQUIRED CONFIG)` fails with:
+```
+CMake Error: Library 'parquet' not found in package.
+Call Stack: Arrow-Target-release.cmake:23 (conan_package_library_targets)
+```
+
+**Root cause**: The custom arrow recipe at `recipes/arrow/conanfile.py` set
+`cmake_file_name` PER-COMPONENT with different values (Arrow vs Parquet vs
+ArrowFlight). This caused Conan's CMakeDeps to emit `parquet` library
+resolution in `Arrow-Target-release.cmake` where it couldn't be found.
+
+**Fix**: Align with [ConanCenter's canonical arrow recipe](https://github.com/conan-io/conan-center-index/blob/master/recipes/arrow/all/conanfile.py):
+
+```python
+# ONE top-level cmake_file_name (NOT per-component)
+self.cpp_info.set_property("cmake_file_name", "Arrow")
+
+# Components set cmake_target_name only — all share Arrow's config file
+self.cpp_info.components["libarrow"].set_property(
+    "cmake_target_name", "Arrow::arrow_static")
+self.cpp_info.components["libparquet"].set_property(
+    "cmake_target_name", "Parquet::parquet_static")
+```
+
+Plus `rmdir(lib/cmake)` after `cmake.install()` so upstream ArrowConfig.cmake
+doesn't shadow Conan's CMakeDeps-generated one.
+
+| Resource | Type | Specific Coverage | Link |
+|---|---|---|---|
+| **ConanCenter arrow recipe** | Reference impl | The canonical multi-component pattern | [conan-io/conan-center-index/.../arrow](https://github.com/conan-io/conan-center-index/blob/master/recipes/arrow/all/conanfile.py) |
+| **Conan 2 — cpp_info properties** | Docs | `cmake_file_name` vs `cmake_target_name` semantics | [docs.conan.io/2/reference/conanfile/attributes.html](https://docs.conan.io/2/reference/conanfile/attributes.html) |
+| **`recipes/arrow/conanfile.py`** | Source (this repo) | The fixed recipe — single top-level `cmake_file_name`, six components with `cmake_target_name` only | [`recipes/arrow/conanfile.py`](../recipes/arrow/conanfile.py) |
+| **Commit `87d1c94`** | Git history | The fix commit with full reasoning in message | `git show 87d1c94` |
+
+**Exercise**: Read both the broken (pre-87d1c94) and fixed recipe. For each
+component (arrow_static, parquet_static, arrow_flight_static, gandiva_static,
+arrow_bundled_dependencies), explain what would happen if you removed the
+top-level `cmake_file_name` and kept only per-component values.
+
+### 7.3 Prebuilt DevContainer Image Workflow
+
+The devcontainer takes 30+ minutes to build from scratch (GCC 16 source
+compile dominates). Teammates can't afford this on every clone.
+
+**Solution**: publish a prebuilt image to ghcr.io. devcontainer.json uses
+`"image":` for fast pull (2–5 min), keeps `"build":` for explicit rebuilds.
+`postCreateCommand` is removed because deps are baked into the image.
+
+| Resource | Type | Specific Coverage | Link |
+|---|---|---|---|
+| **`scripts/build-devcontainer.sh`** | Script (this repo) | Rebuild from Dockerfile + bake Conan cache + commit + push | [`scripts/build-devcontainer.sh`](../scripts/build-devcontainer.sh) |
+| **`scripts/push-devcontainer.sh`** | Script (this repo) | Commit CURRENTLY RUNNING container + push (fast path for known-good state) | [`scripts/push-devcontainer.sh`](../scripts/push-devcontainer.sh) |
+| **`scripts/save-devcontainer-tarball.sh`** | Script (this repo) | Export to .tar.gz + sha256 for airgapped distribution | [`scripts/save-devcontainer-tarball.sh`](../scripts/save-devcontainer-tarball.sh) |
+| **`.github/workflows/devcontainer.yml`** | CI workflow | Auto-rebuild on `.devcontainer/`, `recipes/`, `src/`, `conanfile.py` changes + weekly cron | [`.github/workflows/devcontainer.yml`](../.github/workflows/devcontainer.yml) |
+
+**Case study — Lambda ENTRYPOINT gotcha**:
+
+CI workflow `build-devcontainer.sh` originally used:
+```bash
+podman create --name prep ... sleep infinity
+podman start prep
+podman exec -it prep bash -lc '...'
+```
+
+This failed with `Error: can only create exec sessions on running containers:
+container state improper`. The Lambda base image (`public.ecr.aws/lambda/python:3.12`)
+sets an `ENTRYPOINT` pointing at the Lambda Runtime Interface Emulator. Even
+though we overrode `CMD` with `sleep infinity`, the ENTRYPOINT ran first,
+tried to invoke the RIE on `sleep infinity` as a "handler", failed, container
+exited. Subsequent `podman exec` failed because container wasn't running.
+
+**Fix**: `podman run --entrypoint '[]' ... bash -lc '...'`. The
+`--entrypoint '[]'` clears the Lambda ENTRYPOINT. VSCode DevContainers
+auto-clears ENTRYPOINT when starting containers, which is why local dev
+worked but CI didn't.
+
+**Exercise**: Read `scripts/build-devcontainer.sh` and identify the
+`--entrypoint '[]'` line. Remove it mentally and predict what would happen
+on the next CI run.
+
+**Case study — ghcr.io auth scopes**:
+
+Local `podman push ghcr.io/arekglinka/lambda_cpp26-dev:latest` returned
+`403 Forbidden`. CI workflow's `podman push` worked fine. Cause: the local
+`gh auth token` had scopes `admin:public_key, gist, read:org, repo` — missing
+`write:packages`. CI uses `GITHUB_TOKEN` (auto-scoped via the workflow's
+`permissions: packages: write` block).
+
+Fix: `gh auth refresh --scopes write:packages,read:packages` (interactive
+browser flow). Re-login to ghcr.io with the refreshed token.
+
+### 7.4 clangd Version vs C++ Standard Compatibility
+
+System clangd on AL2023 is 15.x (from `clang-tools-extra`). The project uses
+`-std=c++26`. Clang 15 doesn't recognize that flag, falls back to default
+(c++17 ish), and libstdc++ from GCC 16 conditionally compiles out features
+behind `__cplusplus >= 202600L` guards. Result: false-positive errors on
+`<optional>`, `<print>`, etc.
+
+**Fix**: `pip install clangd>=19` provides clangd 22.1.1 with full C++26
+support. devcontainer.json sets `"clangd.path": "/var/lang/bin/clangd"` to
+point at the pip-installed binary.
+
+**Closely related**: `compile_commands.json` must exist for clangd to know
+how each TU compiles. Added `set(CMAKE_EXPORT_COMPILE_COMMANDS ON)` to
+`src/CMakeLists.txt`. clangd config in `.vscode/settings.json`:
+```json
+"clangd.arguments": [
+  "--compile-commands-dir=${workspaceFolder}/build/Release",
+  "--query-driver=/opt/gcc16/bin/g++",
+  "-j=4"
+]
+```
+
+| Resource | Type | Specific Coverage | Link |
+|---|---|---|---|
+| **clangd — compile_commands.json** | Docs | What it is, where clangd searches, --compile-commands-dir | [clangd.llvm.org/.../compile-commands](https://clangd.llvm.org/design.html) |
+| **pip clangd package** | PyPI | Standalone clangd binary distribution (latest LLVM) | [pypi.org/project/clangd](https://pypi.org/project/clangd/) |
+| **`src/CMakeLists.txt`** | Source (this repo) | `CMAKE_EXPORT_COMPILE_COMMANDS` line | [`src/CMakeLists.txt`](../src/CMakeLists.txt) |
+
+**Exercise**: Open `src/sum_columns.cpp` in VSCode attached to the container.
+Remove `"clangd.path"` from `.vscode/settings.json`. Reload window. Observe
+the false-positive errors. Restore the path. Reload. Confirm errors clear.
+
+### 7.5 Mixed Python/C++ Debugging with CodeLLDB
+
+`sum_columns.cpp` is a pybind11 Python extension — you can't "run" it as a
+binary. To debug, launch Python under LLDB with the `.so` on PYTHONPATH.
+C++ breakpoints set in the editor hit when Python crosses the boundary via
+the C Data Interface.
+
+**Launch config** (`.vscode/launch.json` — "Debug pytest (sum_columns module)"):
+```json
+{
+  "type": "lldb",
+  "program": "/var/lang/bin/python3.12",
+  "args": ["-m", "pytest", "tests/", "-v"],
+  "env": {"PYTHONPATH": "${workspaceFolder}/build/Release:${workspaceFolder}"},
+  "preLaunchTask": "build-sum-columns",
+  "sourceLanguages": ["cpp", "python"]
+}
+```
+
+Key fields:
+- `preLaunchTask: build-sum-columns` — rebuilds the `.so` before launching
+- `program: python3.12` — Python launches under LLDB, not the `.so`
+- `PYTHONPATH` — makes `import sum_columns` find the `.so`
+- `sourceLanguages: ["cpp", "python"]` — both languages show stack frames
+
+**Standalone vs pybind11 detection**: a separate task
+(`build-active-standalone-only`) greps the active file for `PYBIND11_MODULE(`
+and fails with a clear error pointing to the pytest config — prevents the
+confusing "build/src/sum_columns does not exist" error.
+
+| Resource | Type | Specific Coverage | Link |
+|---|---|---|---|
+| **CodeLLDB MANUAL.md** | Extension docs | Launch config fields, sourceLanguages, noDebug | [github.com/vadimcn/vscode-lldb/blob/master/MANUAL.md](https://github.com/vadimcn/vscode-lldb/blob/master/MANUAL.md) |
+| **`.vscode/launch.json`** | Source (this repo) | All four configs (standalone debug/run, pytest debug/run) | [`.vscode/launch.json`](../.vscode/launch.json) |
+| **`.vscode/tasks.json`** | Source (this repo) | build-active-cpp, run-active-cpp, build-sum-columns, build-active-standalone-only | [`.vscode/tasks.json`](../.vscode/tasks.json) |
+| **`learn/build.sh`** | Script (this repo) | pybind11 auto-dispatch logic | [`learn/build.sh`](../learn/build.sh) |
+
+**Exercise**: Set a breakpoint inside `sum_columns.cpp`'s `sum_numeric_column()`.
+Press F5 with "Debug pytest (sum_columns module)" selected. When the breakpoint
+hits, examine the call stack — you should see Python frames above the C++ frame
+where you paused. Use `py-bt` (if available) or the VSCode variables panel to
+inspect both Python and C++ state.
 
 ---
 
@@ -334,11 +533,21 @@ At this point you've studied all the individual pieces. Now connect them.
 | [`candidate-interview-questions.md`](./candidate-interview-questions.md) | All 60 Q&As — this IS the exam |
 | [`initial-research.md`](./initial-research.md) | Module sizes, dependency tree, GCC 16 features, risk matrix |
 | [`src/sum_columns.cpp`](../src/sum_columns.cpp) | The complete working extension — read it, modify it, extend it |
-| [`src/CMakeLists.txt`](../src/CMakeLists.txt) | CMake target structure, `cxx_std_26`, static linking flags |
+| [`src/CMakeLists.txt`](../src/CMakeLists.txt) | CMake target structure, `cxx_std_26`, static linking flags, `CMAKE_EXPORT_COMPILE_COMMANDS` |
 | [`conanfile.py`](../conanfile.py) | Consumer recipe, boost override, Arrow options |
 | [`Containerfile`](../Containerfile) | Multi-stage build, GCC 16 from source, Conan cache mounts, cleanroom test |
-| [`recipes/arrow/conanfile.py`](../recipes/arrow/conanfile.py) | Custom Arrow recipe — understand every deviation from ConanCenter |
+| [`recipes/arrow/conanfile.py`](../recipes/arrow/conanfile.py) | Custom Arrow recipe — fixed to canonical ConanCenter pattern (single top-level cmake_file_name) |
 | [`recipes/quantlib/conanfile.py`](../recipes/quantlib/conanfile.py) | Custom QuantLib recipe — understand `conandata.yml` dependency |
+| [`.devcontainer/devcontainer.json`](../.devcontainer/devcontainer.json) | Prebuilt image (`image:`) + fallback build (`build:`), clangd 22 path, no postCreateCommand |
+| [`.devcontainer/Dockerfile`](../.devcontainer/Dockerfile) | GCC 16 from source, clangd 22 via pip, CMake 4.3, no dead `clangd` package (AL2023 fix) |
+| [`learn/build.sh`](../learn/build.sh) | Fat convenience library + per-file compile + pybind11 auto-dispatch to make |
+| [`.vscode/launch.json`](../.vscode/launch.json) | Four configs — standalone debug/run + pytest debug/run (mixed Python/C++ debugging) |
+| [`.vscode/tasks.json`](../.vscode/tasks.json) | build-active-cpp, run-active-cpp, build-sum-columns, build-active-standalone-only (clear-error dispatch) |
+| [`scripts/build-devcontainer.sh`](../scripts/build-devcontainer.sh) | CI: rebuild from Dockerfile + bake Conan cache + commit + push (uses --entrypoint '[]') |
+| [`scripts/push-devcontainer.sh`](../scripts/push-devcontainer.sh) | Local: commit running container + push to ghcr.io |
+| [`scripts/save-devcontainer-tarball.sh`](../scripts/save-devcontainer-tarball.sh) | Airgap/shared-drive tarball + sha256 |
+| [`.github/workflows/devcontainer.yml`](../.github/workflows/devcontainer.yml) | CI: auto-rebuild on dev file changes + weekly cron |
+| [`setup-podman-wsl.sh`](../setup-podman-wsl.sh) | Ubuntu WSL2 rootful Podman + systemd enable + VSCode Machine settings |
 
 ---
 
@@ -348,11 +557,11 @@ At this point you've studied all the individual pieces. Now connect them.
 Week 1  │ Phase 1.1–1.2: Move semantics, smart pointers, C++20/26 features
 Week 2  │ Phase 1.3 + Phase 2.1–2.2: Static linking, pybind11 core, GIL
 Week 3  │ Phase 2.3 + Phase 3.1: PyCapsule protocol (deep study), Arrow architecture
-Week 4  │ Phase 3.2: Conan 2 (recipes, build failures Q45–Q53)
+Week 4  │ Phase 3.2: Conan 2 (recipes, build failures Q45–Q53, CMakeDeps fix)
 Week 5  │ Phase 4.1–4.2: Lambda fundamentals, Docker builds, glibc/ABI
 Week 6  │ Phase 5.1–5.2: Financial math, QuantLib C++ API, integrate into extension
 Week 7  │ Phase 6.1: Build the project end-to-end, data flow trace, mock interviews
-Week 8  │ Phase 6.2–6.3: CI pipeline, interview strategy, final review of all 60 Q&As
+Week 8  │ Phase 6.2–6.3 + Phase 7: CI pipeline, interview strategy, DevContainer ops
 ```
 
 ## Weekly Schedule (Part-Time, 20 h/week)
@@ -364,6 +573,7 @@ Weeks  5–7  │ Phase 3 (Arrow + Conan)
 Weeks  8–10 │ Phase 4 (Lambda + Docker)
 Weeks 11–13 │ Phase 5 (QuantLib)
 Weeks 14–16 │ Phase 6 (Integration + Interview prep)
+Weeks 17–18 │ Phase 7 (DevContainer ops + tooling case studies)
 ```
 
 ---

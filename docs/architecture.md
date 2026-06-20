@@ -191,13 +191,25 @@ graph LR
 
 ```mermaid
 graph TB
-    subgraph "Option A: DevContainer (VSCode)"
-        VSC[VSCode Remote-Containers]
-        DEVCON[.devcontainer/Dockerfile<br/>AL2023 + GCC 16 + clangd]
-        VSC --> DEVCON
-        DEVCON --> EDIT1[Edit with IntelliSense]
-        EDIT1 --> BUILD1[conan install + build]
-        BUILD1 --> TEST1[pytest tests/]
+    subgraph "Option A: Prebuilt DevContainer (default, team onboarding)"
+        PULL[ghcr.io/arekglinka/<br/>lambda_cpp26-dev:latest]
+        VSC[VSCode DevContainers]
+        FAST[Reopen in Container<br/>~2-5 min pull]
+        WORK[Edit + clangd 22<br/>+ GCC 16 + cached Conan]
+        
+        VSC -->|image: in devcontainer.json| PULL
+        PULL --> FAST
+        FAST --> WORK
+    end
+    
+    subgraph "Option A': Rebuild from source (Dockerfile/recipe changes)"
+        REBUILD[F1 → Rebuild Container]
+        DOCKER[.devcontainer/Dockerfile<br/>AL2023 + GCC 16 from source]
+        POSTCREATE[bake Conan deps<br/>via build-devcontainer.sh]
+        
+        REBUILD -->|build: in devcontainer.json| DOCKER
+        DOCKER --> POSTCREATE
+        POSTCREATE --> WORK
     end
     
     subgraph "Option B: Podman + Local Python"
@@ -216,29 +228,102 @@ graph TB
         FULL --> CI[make ci]
     end
     
-    style DEVCON fill:#4a9,stroke:#333
+    style PULL fill:#4a9,stroke:#333,stroke-width:2px
+    style FAST fill:#4a9,stroke:#333
+    style DOCKER fill:#f96,stroke:#333
     style POD fill:#69f,stroke:#333
     style FULL fill:#f96,stroke:#333
 ```
 
-## CI/CD Pipeline
+**Prebuilt image contents**: GCC 16.1.0, clangd 22.1.1 (via pip, supports C++26),
+Conan dep cache (~37 packages: arrow, quantlib, boost, …), pybind11, CMake 4.3,
+system packages from `clang-tools-extra`/`gdb`/`valgrind`.  Bind-mounted
+workspace stays out of the image — teammates get a fresh source checkout
+while inheriting the toolchain and dep cache.
+
+## DevContainer Image Publishing
 
 ```mermaid
 graph LR
-    DEV[Developer<br/>pushes to main]
-    REL[Push to release<br/>or tag v*]
+    subgraph "Triggers"
+        PUSH[Push to main<br/>touching .devcontainer/,<br/>recipes/, src/, conanfile.py]
+        CRON[Weekly cron<br/>Sun 03:00 UTC]
+        MANUAL[workflow_dispatch]
+    end
     
-    DEV -->|no build| SKIP[CI skips on main]
+    subgraph "CI Workflow: devcontainer.yml"
+        AUTH[podman login ghcr.io<br/>with GITHUB_TOKEN]
+        BUILD[podman build<br/>.devcontainer/Dockerfile<br/>~30 min]
+        PREP[podman run --entrypoint '[]'<br/>conan install + build<br/>~5-10 min]
+        COMMIT[podman commit<br/>→ image with baked cache]
+        TAG3[Tag :sha :latest<br/>:dev-YYYYMMDD]
+        PUSH3[podman push ×3]
+        
+        AUTH --> BUILD --> PREP --> COMMIT --> TAG3 --> PUSH3
+    end
     
-    REL --> TRIGGER[Release Build triggered]
-    TRIGGER --> BUILD[Build + test image]
-    BUILD --> CHECK{Cleanroom<br/>test passes?}
-    CHECK -->|No| FAIL[Fail]
-    CHECK -->|Yes| PUSH[Push to ghcr.io]
-    PUSH --> TAG_VER[Tag :version]
-    PUSH --> TAG_LATEST[Tag :latest]
-    TAG_VER --> RELEASE[GitHub Release<br/>with .so asset]
+    subgraph "Local Push (known-good state)"
+        RUN[Container running<br/>with fixes applied]
+        LCOMMIT[podman commit]
+        LPUSH[push-devcontainer.sh<br/>push to ghcr.io]
+        
+        RUN --> LCOMMIT --> LPUSH
+    end
+    
+    PUSH --> AUTH
+    CRON --> AUTH
+    MANUAL --> AUTH
+    
+    style BUILD fill:#f96,stroke:#333,stroke-width:2px
+    style COMMIT fill:#4a9,stroke:#333,stroke-width:2px
+    style PUSH3 fill:#4a9,stroke:#333
+    style LPUSH fill:#69f,stroke:#333
+```
+
+**Two publish paths**:
+- **CI (clean)**: `scripts/build-devcontainer.sh` rebuilds from Dockerfile, bakes
+  Conan cache, commits, pushes — used by `devcontainer.yml` workflow on changes
+- **Local (fast)**: `scripts/push-devcontainer.sh` commits the CURRENTLY RUNNING
+  container (with whatever fixes applied) and pushes — for immediate sharing
+
+**Auth note**: CI uses `GITHUB_TOKEN` (auto-scoped with `packages:write`).
+Local pushes need `gh auth refresh --scopes write:packages,read:packages`
+(interactive browser flow).
+
+**Tarball alternative**: `scripts/save-devcontainer-tarball.sh` exports to
+`.tar.gz + .sha256` for airgapped / shared-drive distribution.
+
+## CI/CD Pipelines
+
+```mermaid
+graph LR
+    subgraph "Release Pipeline (ci.yml)"
+        DEV1[Developer<br/>pushes to main]
+        REL[Push to release<br/>or tag v*]
+        
+        DEV1 -->|no build| SKIP[CI skips on main]
+        REL --> TRIGGER[Release Build triggered]
+        TRIGGER --> BUILD[Build + test image]
+        BUILD --> CHECK{Cleanroom<br/>test passes?}
+        CHECK -->|No| FAIL[Fail]
+        CHECK -->|Yes| PUSH[Push runtime image<br/>to ghcr.io]
+        PUSH --> TAG_VER[Tag :version]
+        PUSH --> TAG_LATEST[Tag :latest]
+        TAG_VER --> RELEASE[GitHub Release<br/>with .so asset]
+    end
+    
+    subgraph "DevContainer Pipeline (devcontainer.yml)"
+        DEV2[Push to main<br/>touching dev files]
+        CRON2[Weekly cron]
+        
+        DEV2 --> BUILD2[Build + bake deps<br/>+ commit + push]
+        CRON2 --> BUILD2
+        BUILD2 --> DEVTAGS[Tag :sha :latest<br/>:dev-YYYYMMDD]
+        DEVTAGS --> DEVPUSH[Push dev image<br/>to ghcr.io]
+    end
     
     style REL fill:#4a9,stroke:#333,stroke-width:2px
     style RELEASE fill:#4a9,stroke:#333,stroke-width:2px
+    style BUILD2 fill:#69f,stroke:#333,stroke-width:2px
+    style DEVPUSH fill:#69f,stroke:#333
 ```

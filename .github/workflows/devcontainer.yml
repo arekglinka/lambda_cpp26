@@ -10,8 +10,7 @@ on:
       - src/**
       - conanfile.py
       - Containerfile.gcc-base
-      - Containerfile.arrow-deps
-      - Containerfile.quantlib-deps
+      - Containerfile.deps
       - .github/workflows/devcontainer.yml
   workflow_dispatch:
   schedule:
@@ -27,16 +26,21 @@ env:
   OWNER: ${{ github.repository_owner }}
 
 # =============================================================================
-# Four jobs, three of them cacheable:
+# Three serial jobs, two of them cacheable:
 #
-#   gcc-base ──► arrow-deps ──┐
-#           ├──► quantlib-deps ──┤──► assemble-devcontainer
-#           │                   │
-#           └──── (content-hash cached on ghcr.io)
+#   gcc-base ──► deps ──► assemble-devcontainer
+#   (cached)    (cached)  (always rebuilds, ~5 min)
 #
-# Worst case (cold cache): ~55 min  (gcc 25 + parallel[arrow 25 ‖ quantlib 25] + assemble 5)
-# Best case (all cache hit): ~5 min (just assemble)
-# One dep change: ~30 min  (one rebuild + assemble)
+# Cold cache:  ~80 min  (gcc 25 + deps 50 + assemble 5)
+# Warm cache:  ~5 min   (just assemble)
+# Recipe change: ~55 min (deps rebuilds + assemble; gcc stays cached)
+#
+# Why serial (not parallel arrow + quantlib): Conan's consumer-side options
+# (arrow csv/json overrides, boost version pin via override=True) only apply
+# when installing from the project's conanfile.py. Splitting the dep graph
+# via `conan install --requires=arrow/18.0.0` produces a different binary
+# variant that triggers a full rebuild at consume time — defeating the
+# parallelism. See docs/architecture.md "DevContainer Image Publishing".
 # =============================================================================
 
 jobs:
@@ -83,11 +87,11 @@ jobs:
           podman push ghcr.io/${OWNER}/lambda_cpp26-gcc-base:latest
           echo "::notice::Built gcc-base ${{ steps.hash.outputs.tag }}"
 
-  arrow-deps:
-    name: Arrow deps
+  deps:
+    name: Conan deps (arrow + quantlib + transitives)
     needs: gcc-base
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     outputs:
       tag: ${{ steps.hash.outputs.tag }}
       cache_hit: ${{ steps.check.outputs.cache_hit }}
@@ -97,91 +101,44 @@ jobs:
       - name: Login to ghcr.io
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Hash inputs (arrow recipe + profile + root conanfile + gcc-base tag)
+      - name: Hash inputs (recipes + profile + root conanfile + gcc-base tag)
         id: hash
         run: |
-          CONTENT_HASH=$(cat recipes/arrow/conanfile.py recipes/arrow/conandata.yml \
-                              profiles/al2023 conanfile.py \
+          CONTENT_HASH=$(cat recipes/arrow/conanfile.py     recipes/arrow/conandata.yml \
+                              recipes/quantlib/conanfile.py recipes/quantlib/conandata.yml \
+                              profiles/al2023               conanfile.py \
                         | sha256sum | awk '{print substr($1,1,16)}')
           HASH="${CONTENT_HASH}-${{ needs.gcc-base.outputs.tag }}"
           echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "Arrow deps tag: $HASH"
+          echo "Deps tag: $HASH"
 
       - name: Check cache hit
         id: check
         run: |
-          if podman pull ghcr.io/${OWNER}/lambda_cpp26-arrow-deps:${{ steps.hash.outputs.tag }}; then
+          if podman pull ghcr.io/${OWNER}/lambda_cpp26-deps:${{ steps.hash.outputs.tag }}; then
             echo "cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "Cache hit — skipping Arrow rebuild"
+            echo "Cache hit — skipping Conan deps rebuild"
           else
             echo "cache_hit=false" >> "$GITHUB_OUTPUT"
-            echo "Cache miss — will rebuild Arrow (~25 min)"
+            echo "Cache miss — will build arrow + quantlib (~50 min)"
           fi
 
-      - name: Build + push Arrow deps
+      - name: Build + push deps image
         if: steps.check.outputs.cache_hit != 'true'
         run: |
-          podman build -f Containerfile.arrow-deps \
+          podman build -f Containerfile.deps \
             --build-arg REGISTRY_OWNER=${OWNER} \
             --build-arg GCC_TAG=${{ needs.gcc-base.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-arrow-deps:${{ steps.hash.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-arrow-deps:latest \
+            -t ghcr.io/${OWNER}/lambda_cpp26-deps:${{ steps.hash.outputs.tag }} \
+            -t ghcr.io/${OWNER}/lambda_cpp26-deps:latest \
             .
-          podman push ghcr.io/${OWNER}/lambda_cpp26-arrow-deps:${{ steps.hash.outputs.tag }}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-arrow-deps:latest
-          echo "::notice::Built arrow-deps ${{ steps.hash.outputs.tag }}"
-
-  quantlib-deps:
-    name: QuantLib deps
-    needs: gcc-base
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    outputs:
-      tag: ${{ steps.hash.outputs.tag }}
-      cache_hit: ${{ steps.check.outputs.cache_hit }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Hash inputs (quantlib recipe + profile + root conanfile + gcc-base tag)
-        id: hash
-        run: |
-          CONTENT_HASH=$(cat recipes/quantlib/conanfile.py recipes/quantlib/conandata.yml \
-                              profiles/al2023 conanfile.py \
-                        | sha256sum | awk '{print substr($1,1,16)}')
-          HASH="${CONTENT_HASH}-${{ needs.gcc-base.outputs.tag }}"
-          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "QuantLib deps tag: $HASH"
-
-      - name: Check cache hit
-        id: check
-        run: |
-          if podman pull ghcr.io/${OWNER}/lambda_cpp26-quantlib-deps:${{ steps.hash.outputs.tag }}; then
-            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "Cache hit — skipping QuantLib rebuild"
-          else
-            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
-            echo "Cache miss — will rebuild QuantLib (~25 min)"
-          fi
-
-      - name: Build + push QuantLib deps
-        if: steps.check.outputs.cache_hit != 'true'
-        run: |
-          podman build -f Containerfile.quantlib-deps \
-            --build-arg REGISTRY_OWNER=${OWNER} \
-            --build-arg GCC_TAG=${{ needs.gcc-base.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-quantlib-deps:${{ steps.hash.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-quantlib-deps:latest \
-            .
-          podman push ghcr.io/${OWNER}/lambda_cpp26-quantlib-deps:${{ steps.hash.outputs.tag }}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-quantlib-deps:latest
-          echo "::notice::Built quantlib-deps ${{ steps.hash.outputs.tag }}"
+          podman push ghcr.io/${OWNER}/lambda_cpp26-deps:${{ steps.hash.outputs.tag }}
+          podman push ghcr.io/${OWNER}/lambda_cpp26-deps:latest
+          echo "::notice::Built deps ${{ steps.hash.outputs.tag }}"
 
   assemble-devcontainer:
     name: Assemble devcontainer
-    needs: [gcc-base, arrow-deps, quantlib-deps]
+    needs: [gcc-base, deps]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -197,9 +154,7 @@ jobs:
 
           podman build -f .devcontainer/Dockerfile \
             --build-arg REGISTRY_OWNER=${OWNER} \
-            --build-arg GCC_TAG=${{ needs.gcc-base.outputs.tag }} \
-            --build-arg ARROW_TAG=${{ needs.arrow-deps.outputs.tag }} \
-            --build-arg QUANTLIB_TAG=${{ needs.quantlib-deps.outputs.tag }} \
+            --build-arg DEPS_TAG=${{ needs.deps.outputs.tag }} \
             -t ghcr.io/${OWNER}/lambda_cpp26-dev:${SHORT_SHA} \
             -t ghcr.io/${OWNER}/lambda_cpp26-dev:latest \
             -t ghcr.io/${OWNER}/lambda_cpp26-dev:${DATE_TAG} \
@@ -225,8 +180,7 @@ jobs:
             echo "| Stage | Tag | Status |"
             echo "|---|---|---|"
             echo "| gcc-base | \`${{ needs.gcc-base.outputs.tag }}\` | ${{ needs.gcc-base.outputs.cache_hit == 'true' && '✓ cache hit' || '🔄 rebuilt' }} |"
-            echo "| arrow-deps | \`${{ needs.arrow-deps.outputs.tag }}\` | ${{ needs.arrow-deps.outputs.cache_hit == 'true' && '✓ cache hit' || '🔄 rebuilt' }} |"
-            echo "| quantlib-deps | \`${{ needs.quantlib-deps.outputs.tag }}\` | ${{ needs.quantlib-deps.outputs.cache_hit == 'true' && '✓ cache hit' || '🔄 rebuilt' }} |"
+            echo "| deps | \`${{ needs.deps.outputs.tag }}\` | ${{ needs.deps.outputs.cache_hit == 'true' && '✓ cache hit' || '🔄 rebuilt' }} |"
             echo ""
             echo "Published tags:"
             echo '```'

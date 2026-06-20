@@ -290,9 +290,8 @@ Suppressing the warning would require rebuilding LLDB with
 | File | Scope | Purpose |
 |---|---|---|
 | `Containerfile.gcc-base` | Image build | Shared foundation (GCC 16 + system pkgs + pip tools + conan setup). Cached by content hash on ghcr.io. |
-| `Containerfile.arrow-deps` | Image build | Builds ONLY Apache Arrow + transitive deps. `FROM gcc-base`. Parallel with `quantlib-deps`. Cached by content hash. |
-| `Containerfile.quantlib-deps` | Image build | Builds ONLY QuantLib + boost. `FROM gcc-base`. Parallel with `arrow-deps`. Cached by content hash. |
-| `.devcontainer/Dockerfile` | Image build | Multi-stage assembled devcontainer. `FROM` all three cached intermediates, merges Conan caches via `--mount=type=bind`, adds dev tools. |
+| `Containerfile.deps` | Image build | Builds Apache Arrow + QuantLib + all transitive deps via `conan install conanfile.py`. `FROM gcc-base`. Cached by content hash. |
+| `.devcontainer/Dockerfile` | Image build | Final dev container. `FROM deps`, adds dev tools (gdb, valgrind, clang-tools-extra, pyarrow, pytest, clangd). |
 | `.devcontainer/devcontainer.json` | Image build | Default config — uses `image` from registry with `build` fallback |
 | `.devcontainer/local-snapshot/devcontainer.json` | Image use | Snapshot config — uses local image, restores `containerEnv` |
 | `.vscode/settings.json` | Workspace | Podman dockerPath, cpptools suppression, clangd args |

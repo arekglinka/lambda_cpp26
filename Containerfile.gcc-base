@@ -36,12 +36,10 @@ RUN dnf install -y \
         zlib-devel openssl-devel \
     && dnf clean all
 
-# Global CFLAGS: AL2023 ships with K&R-C-era transitive deps (termcap etc.)
-# that GCC 16 rejects by default. Must be ENV (not Conan profile cflags)
-# because Conan profile cflags don't propagate to CMake-based transitive deps.
-ENV CFLAGS="-std=gnu11 -fgnu89-inline"
-ENV CXXFLAGS=""
-
+# Build GCC 16 from source WITHOUT custom CFLAGS — the bootstrap compiler
+# (AL2023's system GCC 11) compiles GCC 16's own sources, which use `bool`
+# without <stdbool.h> in i386.h. Forcing CFLAGS here breaks that bootstrap.
+# CFLAGS for transitive deps (termcap K&R C etc.) are set AFTER this step.
 RUN mkdir -p /tmp/gcc && cd /tmp/gcc && \
     curl -sL "https://gcc.gnu.org/pub/gcc/releases/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" | \
     tar xJ --strip-components=1 && \
@@ -55,6 +53,14 @@ ENV CC=/opt/gcc16/bin/gcc
 ENV CXX=/opt/gcc16/bin/g++
 ENV PATH="/opt/gcc16/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/gcc16/lib64:${LD_LIBRARY_PATH}"
+
+# Set AFTER the GCC build so the bootstrap above runs with clean flags.
+# -std=gnu17 (NOT gnu11) keeps K&R C function declarations working in
+# transitive deps (termcap etc.) while not breaking modern C code. The
+# Conan profile's tools.build:cflags adds -Wno-error=implicit-function-declaration
+# as defense in depth — see docs/session-timeline.md Q21 for the history.
+ENV CFLAGS="-std=gnu17"
+ENV CXXFLAGS=""
 
 RUN pip3.12 install --no-cache-dir \
         "conan>=2.4" "cmake>=3.28" "ninja>=1.11" "pybind11>=2.13"

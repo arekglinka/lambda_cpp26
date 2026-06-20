@@ -17,7 +17,6 @@ CTestTestfile.cmake
 !recipes/
 
 # IDE / Editor
-.vscode/
 .idea/
 *.swp
 *.swo

@@ -1,0 +1,61 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-active-cpp",
+            "detail": "Build the C++ file in the active editor (learn/ or src/)",
+            "type": "shell",
+            "command": "./learn/build.sh",
+            "args": [
+                "${relativeFile}"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run-active-cpp",
+            "detail": "Build + run the active C++ file in terminal (no debugger)",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/${relativeFileDirname}/${fileBasenameNoExtension}",
+            "dependsOn": "build-active-cpp",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "clear": true
+            }
+        },
+        {
+            "label": "build-sum-columns",
+            "detail": "Rebuild the pybind11 .so via Conan's CMake (incremental)",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "-C",
+                "build/Release",
+                "sum_columns",
+                "-j$(nproc)"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$gcc"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,34 @@
+{
+    // See https://github.com/vadimcn/vscode-lldb/blob/v1.9.2/MANUAL.md
+    // for CodeLLDB launch configuration options.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug active C++ file",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/${relativeFileDirname}/${fileBasenameNoExtension}",
+            "args": [],
+            "cwd": "${fileDirname}",
+            "preLaunchTask": "build-active-cpp",
+            "sourceLanguages": [
+                "cpp"
+            ]
+        },
+        {
+            // Same as above but with noDebug — equivalent to Ctrl+F5 on the
+            // config above, exposed as a separate entry for explicit menu use.
+            "name": "Run active C++ file (no debug)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/${relativeFileDirname}/${fileBasenameNoExtension}",
+            "args": [],
+            "cwd": "${fileDirname}",
+            "preLaunchTask": "build-active-cpp",
+            "noDebug": true,
+            "sourceLanguages": [
+                "cpp"
+            ]
+        }
+    ]
+}

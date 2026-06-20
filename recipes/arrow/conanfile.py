@@ -342,18 +342,19 @@ class ArrowConan(ConanFile):
     # ------------------------------------------------------------------ #
 
     def build(self):
-        import subprocess, os
+        # Conan 2.x nesting bug: when self.folders.source = "cpp" is set in
+        # layout(), the source gets extracted to .../s/cpp/cpp/ (doubled cpp).
+        # Detect this ONLY within our own source_folder — never search the
+        # global conan cache, because other packages (thrift, etc.) ship
+        # `tutorial/cpp/CMakeLists.txt` which sorts before our own path
+        # and gets picked up incorrectly.
+        import os
+        source_dir = self.source_folder
+        doubled = os.path.join(source_dir, "cpp")
+        if os.path.isfile(os.path.join(doubled, "CMakeLists.txt")):
+            source_dir = doubled
 
-        result = subprocess.run(
-            ["find", "/root/.conan2/p/b", "-name", "CMakeLists.txt",
-             "-path", "*/cpp/CMakeLists.txt", "-not", "-path", "*/test*",
-             "-not", "-path", "*/python/*"],
-            capture_output=True, text=True, timeout=10,
-        )
-        candidates = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-        source_dir = os.path.dirname(candidates[0]) if candidates else None
-
-        if source_dir and source_dir != self.source_folder:
+        if source_dir != self.source_folder:
             self.output.warning(f"arrow: cmake source {self.source_folder} -> {source_dir}")
             cls = type(self)
             orig = cls.source_folder

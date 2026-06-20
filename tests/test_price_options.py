@@ -20,7 +20,7 @@ class TestPriceOptions:
     def test_spot_is_last_close(self, price_data):
         result = ext.price_options(price_data)
         close_col = price_data.column("close")
-        expected_spot = close_col[close_col.length - 1].as_py()
+        expected_spot = close_col[len(close_col) - 1].as_py()
         assert abs(result["spot"] - expected_spot) < 1e-6
 
     def test_volatility_positive(self, price_data):

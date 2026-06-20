@@ -29,6 +29,13 @@ find_package(Arrow REQUIRED CONFIG)
 find_package(QuantLib REQUIRED CONFIG)
 
 # --- pybind11 extension module ---
+# Override pybind11_strip before pybind11_add_module.  pybind11 3.0+
+# unconditionally strips the .so in Release/MinSizeRel builds via a post-
+# build /usr/bin/strip call — there's no PYBIND11_NO_STRIP option anymore.
+# Containerfile's own `strip --strip-unneeded` handles production deploy,
+# so the local-dev .so keeps DWARF for LLDB.
+function(pybind11_strip)
+endfunction()
 pybind11_add_module(sum_columns
     MODULE
     sum_columns.cpp
@@ -36,6 +43,19 @@ pybind11_add_module(sum_columns
 
 # Our TU compiles at C++26; the dependency graph stays at c++17 (Conan profile).
 target_compile_features(sum_columns PRIVATE cxx_std_26)
+
+# Always emit DWARF debug info for our TU even in Release builds.  The deps
+# stay optimized/stripped (multi-hour rebuild avoided); our .so grows by a few
+# MB but Containerfile's `strip --strip-unneeded` removes it for production
+# deploy.  Without this, C++ breakpoints set in sum_columns.cpp never hit
+# when Python loads the .so under LLDB.
+#
+# -g must be on BOTH compile and link commands when -flto is active: GCC
+# encapsulates debug info in .gnu.debuglto_* sections during compile, then
+# the LTO link-time recompile emits final .debug_* sections — needs -g at
+# link or LTO silently strips it.
+target_compile_options(sum_columns PRIVATE -g)
+target_link_options(sum_columns PRIVATE -g)
 
 target_link_libraries(sum_columns PRIVATE
     Python::Module

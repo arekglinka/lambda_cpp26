@@ -53,6 +53,16 @@ OUT_DIR="$PROJECT_DIR/build/$SRC_REL_DIR"
 OUT="$OUT_DIR/$OUT_NAME"
 mkdir -p "$OUT_DIR"
 
+# pybind11 modules (PYBIND11_MODULE macro) are NOT standalone executables —
+# they must be built by CMake's pybind11_add_module() and produce a
+# Python-loadable .so at build/Release/<name>.cpython-*.so.  Auto-route.
+if grep -q "PYBIND11_MODULE(" "$PROJECT_DIR/$SRC" 2>/dev/null; then
+    echo "==> $SRC is a pybind11 module, routing to: make -C build/Release $OUT_NAME"
+    make -C "$PROJECT_DIR/build/Release" "$OUT_NAME" -j"$(nproc)"
+    echo "Built: $PROJECT_DIR/build/Release/$OUT_NAME.cpython-*.so"
+    exit 0
+fi
+
 /opt/gcc16/bin/g++ -std=c++26 -O0 -g \
     $INCLUDE_DIRS \
     "$PROJECT_DIR/$SRC" \

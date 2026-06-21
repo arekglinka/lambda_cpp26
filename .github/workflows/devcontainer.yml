@@ -91,7 +91,9 @@ jobs:
     name: Conan deps (arrow + quantlib + transitives)
     needs: gcc-base
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # Cold build: ~80-85 min (boost 5 + small deps 5 + quantlib 35 + arrow 35).
+    # 90 min gives ~5 min margin. Once cached, this job is a ~1-min cache hit.
+    timeout-minutes: 90
     outputs:
       tag: ${{ steps.hash.outputs.tag }}
       cache_hit: ${{ steps.check.outputs.cache_hit }}

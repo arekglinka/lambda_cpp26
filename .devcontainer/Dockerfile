@@ -44,17 +44,13 @@ FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-small-deps:${SMALL_DEPS_TAG}
 #
 # --mount=type=bind: read-only mounts, no intermediate COPY layers.
 # Pattern "arrow/18.0.0:*" includes ALL binary variants (the :* wildcard).
-RUN --mount=type=bind,from=arrow-cache,source=/root/.conan2,target=/tmp/arrow-conan \
-    --mount=type=bind,from=quantlib-cache,source=/root/.conan2,target=/tmp/ql-conan \
-    mkdir -p /tmp/arrow-home /tmp/ql-home && \
-    ln -sf /tmp/arrow-conan /tmp/arrow-home/.conan2 && \
-    ln -sf /tmp/ql-conan /tmp/ql-home/.conan2 && \
+RUN --mount=type=bind,from=arrow-cache,source=/root,target=/tmp/arrow-home \
+    --mount=type=bind,from=quantlib-cache,source=/root,target=/tmp/ql-home \
     CONAN_HOME=/tmp/arrow-home conan cache save "arrow/18.0.0:*" --file /tmp/arrow-delta.tgz && \
     CONAN_HOME=/tmp/ql-home conan cache save "quantlib/1.38:*" --file /tmp/ql-delta.tgz && \
     conan cache restore /tmp/arrow-delta.tgz && \
     conan cache restore /tmp/ql-delta.tgz && \
-    rm -f /tmp/arrow-delta.tgz /tmp/ql-delta.tgz && \
-    rm -f /tmp/arrow-home/.conan2 /tmp/ql-home/.conan2
+    rm -f /tmp/arrow-delta.tgz /tmp/ql-delta.tgz
 
 # Dev-only packages (NOT in upstream images because prod doesn't need them).
 RUN dnf install -y \

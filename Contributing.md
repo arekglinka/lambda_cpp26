@@ -4,18 +4,37 @@
 
 ### Option A: VSCode DevContainer (recommended)
 
-1. Install [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/getting-started/)
+**One-command setup** (after `git clone`):
+
+```bash
+git clone git@github.com:arekglinka/lambda_cpp26.git
+cd lambda_cpp26
+./scripts/setup-local-env.sh
+```
+
+This script pulls the CI-built devcontainer image from ghcr.io, pre-builds
+all workspace artifacts (compile_commands.json + pybind11 .so), and verifies
+pytest passes. After it completes, open in VSCode and "Reopen in Container" —
+everything is ready: clangd IntelliSense, C++ breakpoints in pytest, no
+build step needed on first open.
+
+**Prerequisites** (one-time per machine):
+- [Podman](https://podman.io/getting-started/) installed
+- Podman socket enabled: `systemctl --user enable --now podman.socket`
+- [gh CLI](https://cli.github.com/) authenticated: `gh auth login && gh auth refresh -s read:packages`
+- VSCode with "Dev Containers" extension
+
+**Manual setup** (if you prefer not to use the script):
+
+1. Install [Podman](https://podman.io/getting-started/)
 2. Open the repo in VSCode
 3. Install the "Dev Containers" extension
 4. `Ctrl+Shift+P` → "Reopen in Container"
+5. Inside the container terminal: `./scripts/bootstrap-workspace.sh`
 
-The container builds GCC 16 from source on first open (~10 min, cached after). It auto-runs `conan install + build` on creation. You get clangd IntelliSense, gdb, and pytest ready.
-
-```bash
-# Inside the devcontainer:
-pytest tests/                          # run the test suite
-conan install . --build=missing && conan build .  # rebuild after C++ changes
-```
+The container pulls the CI-built image from ghcr.io (no GCC build needed).
+The bootstrap script populates `build/Release/` with `compile_commands.json`
+and the pybind11 `.so`. After that, clangd, pytest, and C++ debugging all work.
 
 ### Option B: Podman + local Python (fastest iteration)
 

@@ -290,8 +290,13 @@ Suppressing the warning would require rebuilding LLDB with
 | File | Scope | Purpose |
 |---|---|---|
 | `Containerfile.gcc-base` | Image build | Shared foundation (GCC 16 + system pkgs + pip tools + conan setup). Cached by content hash on ghcr.io. |
-| `Containerfile.deps` | Image build | Builds Apache Arrow + QuantLib + all transitive deps via `conan install conanfile.py`. `FROM gcc-base`. Cached by content hash. |
-| `.devcontainer/Dockerfile` | Image build | Final dev container. `FROM deps`, adds dev tools (gdb, valgrind, clang-tools-extra, pyarrow, pytest, clangd). |
+| `Containerfile.small-deps` | Image build | Builds ALL transitive deps (boost, lz4, zstd, snappy, zlib, brotli, re2, utf8proc, rapidjson, thrift, openssl) but NOT arrow/quantlib. `FROM gcc-base`. Common ancestor for arrow + quantlib parallel jobs. |
+| `Containerfile.arrow` | Image build | Builds ONLY Apache Arrow 18.0.0. `FROM small-deps`. Uses `arrow-conanfile.py` to apply consumer-side options (csv/json=False). |
+| `Containerfile.quantlib` | Image build | Builds ONLY QuantLib 1.38. `FROM small-deps`. Mirror of arrow for parallel execution. Uses `quantlib-conanfile.py`. |
+| `small-deps-conanfile.py` | Consumer | Builds transitives with project options (boost override, header_only). Excludes arrow/quantlib so they don't get built in the small-deps stage. |
+| `arrow-conanfile.py` | Consumer | Builds transitives + arrow only with project consumer options (csv=False, json=False). |
+| `quantlib-conanfile.py` | Consumer | Builds transitives + quantlib only. |
+| `.devcontainer/Dockerfile` | Image build | Final dev container. Multi-stage `FROM arrow-cache + quantlib-cache + small-deps`, merges Conan caches via `--mount=type=bind`, adds dev tools (gdb, valgrind, clang-tools-extra, pyarrow, pytest, clangd). |
 | `.devcontainer/devcontainer.json` | Image build | Default config — uses `image` from registry with `build` fallback |
 | `.devcontainer/local-snapshot/devcontainer.json` | Image use | Snapshot config — uses local image, restores `containerEnv` |
 | `.vscode/settings.json` | Workspace | Podman dockerPath, cpptools suppression, clangd args |
@@ -302,7 +307,7 @@ Suppressing the warning would require rebuilding LLDB with
 | `scripts/bootstrap-workspace.sh` | One-shot | Populates `build/Release/` after checkout |
 | `scripts/push-devcontainer.sh` | One-shot | Commits the currently running devcontainer and pushes (fast local-share path) |
 | `scripts/save-devcontainer-tarball.sh` | One-shot | Exports devcontainer to gzip'd OCI tarball for airgapped distribution |
-| `scripts/build-devcontainer.sh` | Deprecated | Single-job predecessor of the 4-job parallel workflow. Kept for historical reference. |
-| `.github/workflows/devcontainer.yml` | CI | 4-job parallel pipeline: gcc-base → (arrow-deps ‖ quantlib-deps) → assemble |
+| `scripts/build-devcontainer.sh` | Deprecated | Single-job predecessor of the 5-job pipeline. Kept for historical reference. |
+| `.github/workflows/devcontainer.yml` | CI | 5-job pipeline: gcc-base → small-deps → (arrow ‖ quantlib) → assemble |
 | `agutil/pull-devcontainer.sh` | External tool | Streams `podman export` from a remote host into a local snapshot image |
 | `agutil/wsl-autostart.ps1` | External tool | Windows-side: keeps WSL2 alive across session switches (only relevant if the source/target is WSL2) |

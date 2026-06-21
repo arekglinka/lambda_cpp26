@@ -175,3 +175,58 @@ Session 1 hit compaction at 1253 messages. The build debugging phase generates�
 - [ ] GitHub Actions workflow
 - [ ] RIE smoke test
 - [ ] Push to GitHub
+
+---
+
+## Session 2: DevContainer CI Pipeline (June 2026)
+
+### Goal
+Original CI workflow (`devcontainer.yml`) was a single job that timed out
+at the 75-min cap on QuantLib compile (~71% complete when cancelled).
+Goal: split into parallel jobs with per-stage caching so no single job
+hits the timeout.
+
+### Final design
+5 jobs: `gcc-base → small-deps → [arrow ‖ quantlib] → assemble`.
+See [`ci-pipeline.md`](ci-pipeline.md) for the full design and
+[`architecture.md`](architecture.md) § "DevContainer Image Publishing"
+for the diagram.
+
+### Failures diagnosed and fixed (in order)
+
+Each row = one CI run that failed. Total: 7 failed runs before success.
+Each took 30-90 min wall to discover.
+
+| # | Failure | Root cause | Fix |
+|---|---|---|---|
+| 1 | Timeout at 71% of QuantLib | Original single-job workflow had 75-min cap; full build needs ~90 min | Split into parallel jobs |
+| 2 | GCC build error: `unknown type name 'bool'` in i386.h | `ENV CFLAGS="-std=gnu11 -fgnu89-inline"` set BEFORE GCC bootstrap; bootstrap compiler compiled GCC 16 source in C11 mode where `bool` isn't a built-in | Move ENV CFLAGS AFTER GCC build; use `-std=gnu17` (matches Containerfile.base's working pattern) |
+| 3 | Conan: `Conanfile not found at /tmp/arrow/18.0.0` | Conan 2 preferentially treats `name/version` as relative path, not reference | Install FROM conanfile.py instead of by reference |
+| 4 | Assemble triggered arrow full rebuild despite arrow-deps image | `--requires=arrow/18.0.0` from CLI skips consumer-side options; produces wrong binary variant (csv=True, json=True vs project's csv=False, json=False) | Per-library conanfiles (arrow-conanfile.py) that apply the same consumer options as conanfile.py |
+| 5 | Arrow cmake: `include could not find requested file: BoostMacros` | Arrow recipe's `find /root/.conan2/p/b ... -path */cpp/CMakeLists.txt` matched thrift's `tutorial/cpp/CMakeLists.txt` (alphabetically first). CMake configured THRIFT's tutorial instead of arrow; that tutorial has `include(BoostMacros)` at line 20 | Scope source-folder detection to recipe's own `self.source_folder` only |
+| 6 | `no space left on device` during boost source extraction | ubuntu-latest runner has ~14 GB free; boost source alone is ~5 GB of HTML docs | Clear preinstalled toolchains (dotnet/android/ghc/swift/etc.) at start of heavy jobs — recovers ~6 GB |
+| 7 | Multiple timeout cancellations (small-deps at 30 min, deps at 75 min) | Local time estimates were too optimistic for CI; CI runners ~1.5x slower than local | Bump every job's `timeout-minutes` to ~1.5x local + 25% margin |
+| 8 | Assemble `podman push` HTTP 403 on `lambda_cpp26-dev` package | Package was originally created by local PAT `podman push`, owned by user account; workflow's `GITHUB_TOKEN` lacks write access | Delete package via `gh api -X DELETE`; CI recreates owned by GITHUB_TOKEN |
+
+### Key architectural decisions
+
+1. **Container images on ghcr.io as the "Conan remote"**: GitHub
+   Packages doesn't implement Conan's REST API v2. Container images
+   tagged by content hash achieve the same effect (cache binaries, reuse
+   across runs, allow local `podman pull`).
+2. **`small-deps` as common ancestor**: arrow and quantlib images both
+   `FROM small-deps`. Their conan caches therefore share IDENTICAL
+   transitives, making the assemble-stage `cp -rn` merge conflict-free.
+3. **Per-library conanfiles**: `arrow-conanfile.py` and
+   `quantlib-conanfile.py` mirror the project's consumer-side options so
+   each parallel job produces the same binary variant the project would.
+   Without these, Conan 2 CLI skips consumer options and the parallel
+   jobs produce wrong variants.
+4. **BuildKit `--mount=type=bind` for cache merge**: avoids ~8 GB of
+   intermediate COPY layer bloat in the final image.
+
+### Outcome
+
+CI pipeline now runs end-to-end in ~85 min cold / ~5 min fully cached.
+Per-recipe cache granularity achieved: changing arrow only rebuilds
+arrow + assemble (~35 min); quantlib + small-deps + gcc-base stay cached.

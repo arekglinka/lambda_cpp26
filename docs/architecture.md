@@ -269,7 +269,7 @@ while inheriting the toolchain and dep cache.
 ```mermaid
 graph TB
     subgraph "Triggers"
-        PUSH[Push to main<br/>touching .devcontainer/, recipes/,<br/>profiles/, src/, conanfile.py,<br/>Containerfile.*]
+        PUSH[Push to main<br/>touching .devcontainer/, recipes/,<br/>profiles/, src/, conanfile.py,<br/>Containerfile.*, *-conanfile.py]
         CRON[Weekly cron<br/>Sun 03:00 UTC]
         MANUAL[workflow_dispatch]
     end
@@ -285,68 +285,101 @@ graph TB
         GSKIP -->|miss| GBUILD --> GDONE
     end
     
-    subgraph "Job 2: deps (cacheable, serial after gcc-base)"
-        DH[Hash of recipes/*<br/>+ profile + conanfile<br/>+ gcc-base tag]
-        DPULL[podman pull<br/>deps:HASH]
-        DSKIP{Hit?}
-        DBUILD[podman build Containerfile.deps<br/>FROM gcc-base<br/>conan install conanfile.py<br/>arrow + quantlib + transitives<br/>~50 min cold]
+    subgraph "Job 2: small-deps (cacheable)"
+        SH[Hash of small-deps-conanfile.py<br/>+ profile + gcc-base tag]
+        SPULL[podman pull<br/>small-deps:HASH]
+        SSKIP{Hit?}
+        SBUILD[podman build Containerfile.small-deps<br/>FROM gcc-base<br/>conan install small-deps-conanfile.py<br/>boost + lz4 + zstd + thrift + openssl + ...<br/>~30-35 min cold on CI]
         
-        DH --> DPULL --> DSKIP
-        DSKIP -->|hit| DDONE[cached]
-        DSKIP -->|miss| DBUILD --> DDONE
+        SH --> SPULL --> SSKIP
+        SSKIP -->|hit| SDONE[cached]
+        SSKIP -->|miss| SBUILD --> SDONE
     end
     
-    subgraph "Job 3: assemble-devcontainer (always rebuilds)"
-        AFROM[FROM deps image]
+    subgraph "Job 3: arrow (parallel, cacheable)"
+        AH[Hash of recipes/arrow/*<br/>+ arrow-conanfile.py<br/>+ profile + small-deps tag]
+        APULL[podman pull<br/>arrow:HASH]
+        ASKIP{Hit?}
+        ABUILD[podman build Containerfile.arrow<br/>FROM small-deps<br/>conan install arrow-conanfile.py<br/>only arrow compiles<br/>~25-30 min cold]
+        
+        AH --> APULL --> ASKIP
+        ASKIP -->|hit| ADONE[cached]
+        ASKIP -->|miss| ABUILD --> ADONE
+    end
+    
+    subgraph "Job 4: quantlib (parallel, cacheable)"
+        QH[Hash of recipes/quantlib/*<br/>+ quantlib-conanfile.py<br/>+ profile + small-deps tag]
+        QPULL[podman pull<br/>quantlib:HASH]
+        QSKIP{Hit?}
+        QBUILD[podman build Containerfile.quantlib<br/>FROM small-deps<br/>conan install quantlib-conanfile.py<br/>only quantlib compiles<br/>~30 min cold]
+        
+        QH --> QPULL --> QSKIP
+        QSKIP -->|hit| QDONE[cached]
+        QSKIP -->|miss| QBUILD --> QDONE
+    end
+    
+    subgraph "Job 5: assemble-devcontainer (always rebuilds)"
+        AMULTI[multi-stage FROM arrow-cache<br/>+ quantlib-cache + small-deps]
+        AMERGE[--mount=type=bind cp -rn merge<br/>~4 GB delta layer]
         ATOOLS[dnf install gdb valgrind<br/>pip install pyarrow pytest clangd]
         ACHECK[conan list arrow/* + quantlib/*<br/>sanity check]
         ATAGS[Tag :sha :latest :dev-YYYYMMDD]
         APUSH[podman push x3]
         
-        AFROM --> ATOOLS --> ACHECK --> ATAGS --> APUSH
+        AMULTI --> AMERGE --> ATOOLS --> ACHECK --> ATAGS --> APUSH
     end
     
     PUSH --> GH
     CRON --> GH
     MANUAL --> GH
     
-    GDONE --> DH
-    DDONE --> AFROM
+    GDONE --> SH
+    SDONE --> AH
+    SDONE --> QH
+    ADONE --> AMULTI
+    QDONE --> AMULTI
     
     style GBUILD fill:#f96,stroke:#333,stroke-width:2px
-    style DBUILD fill:#f96,stroke:#333,stroke-width:2px
-    style AFROM fill:#4a9,stroke:#333,stroke-width:2px
+    style SBUILD fill:#f96,stroke:#333,stroke-width:2px
+    style ABUILD fill:#f96,stroke:#333,stroke-width:2px
+    style QBUILD fill:#f96,stroke:#333,stroke-width:2px
+    style AMULTI fill:#4a9,stroke:#333,stroke-width:2px
     style APUSH fill:#4a9,stroke:#333
 ```
 
-**Why three serial jobs (not parallel arrow + quantlib)**: the original
-design attempted to build Arrow and QuantLib in parallel as separate
-intermediate images, then merge their Conan caches via `cp -rn` in the
-assemble stage. This failed at CI runtime because Conan's consumer-side
-directives — `arrow/18.0.0` options `{csv: False, json: False}`,
-`boost/1.90.0` with `override=True` — only apply when installing FROM
-the project's `conanfile.py`. Installing via `conan install
---requires=arrow/18.0.0` from the CLI produces a different binary
-variant (recipe defaults) that the consumer would reject at link time,
-triggering a full rebuild — defeating the parallelism.
+**Why five jobs with `small-deps` as common ancestor** (the design that
+finally worked after three failed parallel attempts):
 
-The combined deps install (`conan install /tmp/conanfile.py`) preserves
-all consumer options/overrides correctly. The trade-off is no per-recipe
-cache granularity — any recipe change rebuilds both libraries.
+Arrow and QuantLib both `FROM small-deps`, so their conan caches share
+**IDENTICAL transitives**. When the assemble stage merges them via
+`cp -rn` (no-clobber), only the deltas (arrow's binary, quantlib's binary)
+get copied — no conflicts possible because the common parent guarantees
+identical transitive package_ids.
 
-| Scenario | Time |
+| Scenario | Wall time |
 |---|---|
 | All cache hit | ~5 min (just assemble) |
-| GCC base cache hit, deps miss | ~55 min (deps 50 + assemble 5) |
-| Full cold cache | ~80 min (gcc 25 + deps 50 + assemble 5) |
 | Dev-only tooling change (gdb, clangd version bump) | ~5 min (just assemble) |
+| GCC base cache hit, small-deps miss, arrow+quantlib miss | ~60 min (small-deps 30 + parallel[arrow 25 ‖ quantlib 30] + assemble 5) |
+| Full cold cache | ~85 min (gcc 25 + small-deps 30 + parallel[arrow 25 ‖ quantlib 30] + assemble 5) |
+| Single recipe change (e.g. arrow only) | ~35 min (arrow 30 + assemble 5; quantlib + small-deps + gcc stay cached) |
 
-**Cache keys** (content hashes on ghcr.io image tags):
+**Cache keys** (content hashes on ghcr.io image tags, each suffixed with parent tag for cascade):
 - `gcc-base:<hash of Containerfile.gcc-base>`
-- `deps:<hash of recipes/* + profiles/al2023 + conanfile.py + gcc-base tag>`
+- `small-deps:<hash of small-deps-conanfile.py + profiles/al2023>–<gcc-base tag>`
+- `arrow:<hash of recipes/arrow/* + arrow-conanfile.py + profiles/al2023>–<small-deps tag>`
+- `quantlib:<hash of recipes/quantlib/* + quantlib-conanfile.py + profiles/al2023>–<small-deps tag>`
 
-Including the gcc-base tag in the deps hash ensures a gcc-base rebuild
-cascades to a deps rebuild (different hash → cache miss).
+Including the parent tag in each child's hash ensures cascading rebuilds
+(gcc-base change → small-deps rebuild → arrow + quantlib rebuild → assemble).
+
+**Per-library conanfiles** (`arrow-conanfile.py`, `quantlib-conanfile.py`)
+are critical: they apply the project's consumer-side options (`arrow`'s
+`csv=False`/`json=False` overrides, `boost/1.90.0` with `override=True`)
+so each parallel job produces the same binary variant the project's main
+`conanfile.py` would. Without these, Conan 2's CLI `--requires=` skips
+consumer options and produces a different variant that triggers a full
+rebuild at consume time.
 
 **Why not GitHub Packages as a Conan remote**: GitHub Packages (npm/nuget/maven/OCI)
 does not implement Conan's REST API v2. Only GitLab has native Conan 2
@@ -356,9 +389,11 @@ local `podman pull`) without external infrastructure.
 
 **Local pull** of intermediate images for custom builds:
 ```bash
-podman pull ghcr.io/arekglinka/lambda_cpp26-gcc-base:latest  # GCC 16 base only
-podman pull ghcr.io/arekglinka/lambda_cpp26-deps:latest      # + Arrow + QuantLib in conan cache
-podman pull ghcr.io/arekglinka/lambda_cpp26-dev:latest       # full assembled devcontainer
+podman pull ghcr.io/arekglinka/lambda_cpp26-gcc-base:latest    # GCC 16 base only
+podman pull ghcr.io/arekglinka/lambda_cpp26-small-deps:latest  # + boost, lz4, openssl, thrift, abseil, ...
+podman pull ghcr.io/arekglinka/lambda_cpp26-arrow:latest       # + Arrow 18.0.0 binary
+podman pull ghcr.io/arekglinka/lambda_cpp26-quantlib:latest    # + QuantLib 1.38 binary
+podman pull ghcr.io/arekglinka/lambda_cpp26-dev:latest         # full assembled devcontainer
 ```
 
 **Local (fast) push** for sharing a known-good container state:
@@ -367,7 +402,11 @@ devcontainer and pushes to ghcr.io. Useful for hot-fix shares.
 
 **Auth note**: CI uses `GITHUB_TOKEN` (auto-scoped with `packages:write`).
 Local pushes need `gh auth refresh --scopes write:packages,read:packages`
-(interactive browser flow).
+(interactive browser flow). Packages created by local PAT pushes are
+"owned" by the user account; subsequent GITHUB_TOKEN pushes from the repo
+workflow will get HTTP 403 unless the user grants the repo write access
+via Package Settings → Manage Actions Access. Cleanest fix: delete the
+package and let CI recreate it owned by GITHUB_TOKEN.
 
 **Tarball alternative**: `scripts/save-devcontainer-tarball.sh` exports to
 `.tar.gz + .sha256` for airgapped / shared-drive distribution.
@@ -394,15 +433,18 @@ graph LR
         TAG_VER --> RELEASE[GitHub Release<br/>with .so asset]
     end
     
-    subgraph "DevContainer Pipeline (devcontainer.yml) — serial + cached"
+    subgraph "DevContainer Pipeline (devcontainer.yml) — 5 jobs, 4 cacheable"
         DEV2[Push to main<br/>touching dev files]
         CRON2[Weekly cron]
         
         DEV2 --> J1[Job 1: gcc-base<br/>cached by Containerfile.gcc-base hash]
         CRON2 --> J1
-        J1 --> J2[Job 2: deps<br/>cached by recipes + conanfile hash<br/>builds arrow + quantlib together]
-        J2 --> J3[Job 3: assemble<br/>FROM deps + dev tools<br/>~5 min always]
-        J3 --> DEVTAGS[Tag :sha :latest<br/>:dev-YYYYMMDD]
+        J1 --> J2[Job 2: small-deps<br/>cached by small-deps-conanfile.py<br/>builds all transitives]
+        J2 --> J3A[Job 3: arrow<br/>FROM small-deps<br/>only arrow compiles]
+        J2 --> J3B[Job 4: quantlib<br/>FROM small-deps<br/>only quantlib compiles]
+        J3A --> J4[Job 5: assemble<br/>merge caches + dev tools<br/>~5 min always]
+        J3B --> J4
+        J4 --> DEVTAGS[Tag :sha :latest<br/>:dev-YYYYMMDD]
         DEVTAGS --> DEVPUSH[Push dev image<br/>to ghcr.io]
     end
     

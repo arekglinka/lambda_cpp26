@@ -101,9 +101,9 @@ jobs:
     name: Small deps (transitives only)
     needs: gcc-base
     runs-on: ubuntu-latest
-    # Cold build: ~20 min (boost source extract + thrift + openssl + abseil).
-    # 30 min leaves margin.
-    timeout-minutes: 30
+    # Cold build: ~30-35 min on GH runners (boost source + thrift + openssl
+    # + abseil compile). Local was ~20 min but CI runners are ~1.5x slower.
+    timeout-minutes: 45
     outputs:
       tag: ${{ steps.hash.outputs.tag }}
       cache_hit: ${{ steps.check.outputs.cache_hit }}

@@ -1510,3 +1510,146 @@ readelf -d libboost_container.a | grep TEXTREL
 ```
 
 A candidate who understands position-independent code, why shared libraries require it, and how to diagnose the linker error demonstrates real systems-level C++ knowledge.
+
+---
+
+## Section 12: CI Pipeline & Container Orchestration
+
+This section tests understanding of the CI pipeline design, the failures
+that shaped it, and the Conan 2 / GH Actions / Podman interactions that
+make containerized C++ CI hard. Each question is based on a REAL failure
+that occurred during the project's CI pipeline development.
+
+### Q66: Your CI workflow has a single job that builds GCC 16 from source + all Conan deps + the project. It consistently hits the 75-minute GH Actions timeout at ~70% of the build. How do you restructure it?
+
+**What this tests**: understanding of CI parallelism, caching, and the
+trade-offs of monolithic vs split pipelines.
+
+**Key points**:
+- Split into multiple jobs with `needs:` dependencies
+- Each job produces a cacheable intermediate image
+- Heavy stages (GCC compile, Arrow compile, QuantLib compile) become
+  independent cacheable layers
+- Common ancestor pattern: small-deps as shared parent ensures
+  arrow and quantlib caches are merge-compatible
+- See `docs/ci-pipeline.md` for the full 5-job design
+
+**Red flag**: candidate suggests "just increase the timeout" without
+addressing the root cause (serial build of independent components).
+
+### Q67: You split the build into parallel arrow and quantlib jobs. Both use `conan install --requires=arrow/18.0.0` from CLI. The assemble stage triggers a full rebuild of arrow despite the arrow job having it cached. Why?
+
+**What this tests**: understanding of Conan 2's consumer-side options
+and why CLI `--requires` ≠ conanfile.py `requires()`.
+
+**Answer**: Conan 2's `--requires` CLI flag does NOT apply consumer-side
+options (`csv=False`, `json=False` for arrow) or version overrides
+(`boost/1.90.0` with `override=True`). The arrow binary built via
+`--requires` has recipe DEFAULTS (`csv=True, json=True`). When the
+project's `conanfile.py` tries to consume it, the `package_id` doesn't
+match (different options → different hash) → cache miss → rebuild.
+
+**Fix**: use per-library conanfiles (`arrow-conanfile.py`) that mirror
+the project's consumer options. Each parallel job installs from its
+respective conanfile, producing the same binary variant the project
+expects.
+
+### Q68: Arrow's `cmake.configure()` fails with `include could not find requested file: BoostMacros`. BoostMacros doesn't exist anywhere in the arrow source tree. What's happening?
+
+**What this tests**: Conan recipe debugging — specifically the
+source-folder detection logic and how global searches in recipes can
+match other packages.
+
+**Answer**: The arrow recipe has a `find /root/.conan2/p/b ... -path
+*/cpp/CMakeLists.txt` command to detect Conan 2.x's doubled-cpp nesting
+bug. This `find` searches ALL packages in the conan cache. Thrift ships
+`tutorial/cpp/CMakeLists.txt` which sorts BEFORE arrow's
+`cpp/cpp/CMakeLists.txt`. Since Conan builds thrift before arrow, the
+find matches thrift's tutorial first. CMake then configures THRIFT's
+tutorial CMakeLists.txt — which has `include(BoostMacros)` at line 20.
+BoostMacros doesn't exist → error.
+
+**Fix**: scope the source-folder detection to `self.source_folder`
+only — never search the global conan cache.
+
+### Q69: The CI build fails with `no space left on device` during boost source extraction. The `ubuntu-latest` runner has ~14 GB free. Why isn't that enough?
+
+**What this tests**: awareness of GH Actions runner limitations and
+the disk footprint of C++ dependency source trees.
+
+**Answer**: Boost source extraction creates ~5 GB of files (mostly HTML
+documentation in `libs/*/doc/html/` that we never read). Combined with
+Arrow source (~200 MB), QuantLib source (~50 MB), and all build
+artifacts (object files, static archives), the total exceeds 14 GB.
+
+**Fix**: clear preinstalled toolchains we don't use (dotnet ~3 GB,
+android ~2 GB, ghc ~1 GB, swift ~1 GB) at the start of each heavy job.
+Recovers ~6 GB. This is a well-known GH Actions pattern for C++ projects.
+
+### Q70: `podman push ghcr.io/arekglinka/lambda_cpp26-dev:latest` fails with HTTP 403, but pushing to `lambda_cpp26-gcc-base` and `lambda_cpp26-small-deps` succeeds. Why?
+
+**What this tests**: understanding of GHCR package ownership and the
+distinction between PAT-created and GITHUB_TOKEN-created packages.
+
+**Answer**: The `lambda_cpp26-dev` package was originally created by a
+local `podman push` using a Personal Access Token (PAT). GHCR packages
+are "owned" by the credential that created them. A PAT-created package
+is owned by the user account; the workflow's `GITHUB_TOKEN` doesn't
+have write access to it. The intermediate images (gcc-base, small-deps,
+arrow, quantlib) were created by the workflow's `GITHUB_TOKEN` in its
+first run, so they're owned by the repo and subsequent pushes work fine.
+
+**Fix options**:
+1. Delete the package and let CI recreate it owned by `GITHUB_TOKEN`
+2. In GitHub UI: package settings → Manage Actions Access → add the repo with Write role
+3. Change the image name to a fresh package
+
+### Q71: You set `ENV CFLAGS="-std=gnu11 -fgnu89-inline"` at the top of your Containerfile, before the GCC 16 build step. The GCC build fails with `error: unknown type name 'bool'` in `i386.h`. Why?
+
+**What this tests**: understanding of how ENV variables propagate to
+ALL subsequent RUN steps, including the GCC bootstrap compiler.
+
+**Answer**: The ENV CFLAGS is inherited by the GCC build step. The
+bootstrap compiler (AL2023's system GCC 11) picks up these flags when
+compiling GCC 16's own source code. GCC 16's `i386.h:1722` uses `bool`
+without `#include <stdbool.h>`, relying on GNU C extensions that
+provide `bool` as a built-in. The `-std=gnu11` flag disables this
+extension → `bool` is unknown → compile error.
+
+**Fix**: set `ENV CFLAGS` AFTER the GCC build step (so the bootstrap
+runs with clean flags), and use `-std=gnu17` (keeps K&R C function
+declarations working for transitive deps without disabling GNU
+extensions).
+
+### Q72: Why does the CI pipeline use container images on ghcr.io as the "Conan binary cache" instead of GitHub Packages' native package registry?
+
+**What this tests**: understanding of Conan's protocol requirements and
+the limitations of GH Packages.
+
+**Answer**: Conan 2 requires a server implementing its REST API v2
+(endpoints like `/v2/conans/{name}/{version}/{user}/{channel}/revisions/{rrev}/files/{filename}`).
+GitHub Packages supports npm, NuGet, Maven, and OCI/Docker registries,
+but does NOT implement Conan's REST API. Only GitLab has native Conan 2
+registry support among forge platforms.
+
+The container-image-based approach achieves the same effect: each build
+stage produces an OCI image with the Conan cache baked in. Images are
+tagged by content hash of their inputs (recipe files + profile + parent
+tag). Pull-before-build at every stage; skip if hit. Local devs can
+`podman pull` any intermediate image for custom builds.
+
+### Q73: The assemble stage uses `--mount=type=bind` (BuildKit) instead of `COPY --from` to merge Conan caches. Why?
+
+**What this tests**: understanding of Docker layer management and the
+performance implications of COPY vs bind-mount in multi-stage builds.
+
+**Answer**: `COPY --from=arrow-cache /root/.conan2 /tmp/arrow-conan`
+creates a new image layer containing the FULL 3.8 GB conan cache from
+the arrow image. Doing this for both arrow-cache and quantlib-cache
+adds ~8 GB of intermediate layers to the final image.
+
+`RUN --mount=type=bind,from=arrow-cache,...` mounts the source stage
+read-only DURING the RUN command without creating an intermediate
+layer. Only the RUN's output (the merged cache, ~4 GB of deltas) ends
+up in the final image. The `# syntax=docker/dockerfile:1.6` directive
+is required to enable this BuildKit feature in Podman.

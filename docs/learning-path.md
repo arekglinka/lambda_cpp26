@@ -696,3 +696,93 @@ Weeks 17–18 │ Phase 7 (DevContainer ops + tooling case studies)
 | Read Hull's textbook cover-to-cover | Read Ch. 13–15, 17–18 only (Black-Scholes, Greeks, volatility) |
 | Memorize all 60 answers verbatim | Understand the *reasoning* — the interview tests understanding, not recall |
 | Skip the build-debug questions (Q21–Q30) | Study them hardest — they test real-world experience, not book knowledge |
+
+---
+
+## Phase 8 — CI Pipeline Design for C++ Projects (Case Study)
+
+This phase uses the project's CI pipeline evolution as a real-world case
+study in designing containerized C++ CI on GitHub Actions. The pipeline
+went through 8 failed iterations before reaching a working design.
+
+### 8.1 The Problem: Single-Job Timeout
+
+**Symptom**: DevContainer Image build cancelled at 75-min GH Actions
+timeout, 71% through QuantLib compile.
+
+**Root cause**: Single-job workflow built GCC 16 (~25 min) + all Conan
+deps including Arrow (~25 min) + QuantLib (~25 min) serially = ~75+ min.
+
+**Lesson**: C++ compile times for large dependency graphs (Arrow,
+QuantLib, Boost) easily exceed GH Actions' 6-hour per-job limit for
+cold builds, and the practical 75-min timeout for most workflows.
+Splitting is mandatory.
+
+### 8.2 Failed Approach 1: Parallel Without Common Ancestor
+
+**Design**: Build arrow-deps and quantlib-deps in parallel as separate
+images, merge caches via `cp -rn` in assemble.
+
+**Failure**: Conan's consumer-side options (`arrow csv/json=False`,
+`boost/1.90.0 override=True`) only apply when installing from a
+`conanfile.py`. Using `conan install --requires=arrow/18.0.0` from CLI
+produces a DIFFERENT binary variant (recipe defaults: `csv=True,
+json=True`). The assemble stage's `conan list` sees arrow, but when the
+project's `conanfile.py` tries to consume it, the package_id doesn't
+match → full rebuild.
+
+**Lesson**: Conan 2's `--requires` CLI flag is NOT equivalent to a
+consumer conanfile's `requires()`. The former skips consumer-side
+options and version overrides. Always use a real `conanfile.py` when
+consumer options matter.
+
+### 8.3 Failed Approach 2: Combined Deps (Serial, No Parallelism)
+
+**Design**: Single deps job builds arrow + quantlib together via
+`conan install conanfile.py`.
+
+**Failure**: ~80 min cold build. Sometimes hit the 75-min timeout
+(86% of arrow when cancelled). Sometimes hit runner disk space limits
+(boost source extraction = ~5 GB of HTML docs).
+
+**Lesson**: Serial builds of large C++ deps are too slow for CI
+iteration. Disk space on `ubuntu-latest` (~14 GB free) is insufficient
+for large Conan graphs without cleanup.
+
+### 8.4 The Working Design: 5 Jobs with Common Ancestor
+
+**Architecture**:
+```
+gcc-base → small-deps → [arrow ‖ quantlib] → assemble
+```
+
+**Key insight**: both arrow and quantlib images `FROM small-deps` (same
+parent). Their conan caches therefore have IDENTICAL transitives. The
+`cp -rn` merge in assemble is conflict-free — only the deltas (arrow
+binary, quantlib binary) get copied.
+
+**Per-library conanfiles** (`arrow-conanfile.py`, `quantlib-conanfile.py`)
+mirror the project's consumer options so each parallel job produces the
+same binary variant the project would.
+
+**Result**: ~60 min cold / ~5 min fully cached. Per-recipe granularity:
+changing arrow only rebuilds arrow (~30 min) + assemble (~5 min).
+
+### 8.5 Lessons for Any C++ CI Pipeline
+
+| Lesson | Source |
+|---|---|
+| CI runners are ~1.5x slower than local | Always calibrate timeouts on CI, not local |
+| Boost source is ~5 GB of HTML docs we don't read | Clear runner disk before heavy builds |
+| Conan 2 CLI `--requires` ≠ consumer conanfile | Use real conanfiles when consumer options matter |
+| `conan install "name/version"` is treated as a path | Install from conanfile.py, not by reference |
+| GH Packages can't be a Conan remote | Use container-image-based caching on ghcr.io |
+| Packages created by PAT block GITHUB_TOKEN pushes | Let CI create packages, or fix permissions |
+| `ENV CFLAGS` before GCC bootstrap breaks GCC itself | Set CFLAGS AFTER GCC build, use `-std=gnu17` |
+| Global `find` in Conan recipes matches other packages | Scope to `self.source_folder` only |
+
+### Recommended Reading
+
+- [`docs/ci-pipeline.md`](ci-pipeline.md) — full pipeline reference
+- [`docs/architecture.md`](architecture.md) § "DevContainer Image Publishing"
+- [`docs/session-timeline.md`](session-timeline.md) § "Session 2"

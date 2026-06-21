@@ -482,3 +482,89 @@ gdb ./build/learn/t1
 # (gdb) break main
 # (gdb) run
 ```
+
+---
+
+## CI Pipeline Debugging
+
+When a CI run fails, reproducing locally saves a ~30-90 min CI cycle.
+See [`ci-pipeline.md`](ci-pipeline.md) for the full pipeline reference.
+
+### Reproducing a CI build step locally
+
+Each CI job corresponds to a `podman build` against one of the
+Containerfiles. To reproduce locally:
+
+```bash
+# Pull the cached parent image (avoids rebuilding upstream stages)
+podman pull ghcr.io/arekglinka/lambda_cpp26-gcc-base:latest
+
+# Reproduce the small-deps stage
+podman build -f Containerfile.small-deps \
+    --build-arg REGISTRY_OWNER=arekglinka \
+    --build-arg GCC_TAG=latest \
+    -t localhost/lambda_cpp26-small-deps:debug \
+    --progress=plain .
+
+# Reproduce the arrow stage (after small-deps succeeds)
+podman tag localhost/lambda_cpp26-small-deps:debug ghcr.io/arekglinka/lambda_cpp26-small-deps:local
+podman build -f Containerfile.arrow \
+    --build-arg REGISTRY_OWNER=arekglinka \
+    --build-arg SMALL_DEPS_TAG=local \
+    -t localhost/lambda_cpp26-arrow:debug \
+    --progress=plain .
+```
+
+### Inspecting conan cache state
+
+When a Conan error occurs, inspect the cache directly:
+
+```bash
+# What's in the cache?
+conan list "*" --cache
+
+# Specific package?
+conan list "arrow/*" --cache
+
+# Where does a package live?
+conan cache path boost/1.90.0
+
+# Save a package to a portable tgz (for transfer between containers)
+conan cache save "lz4/*" --file /tmp/lz4.tgz
+
+# Restore in another container
+conan cache restore /tmp/lz4.tgz
+```
+
+### Debugging recipe issues (the BoostMacros pattern)
+
+When a Conan recipe fails at `cmake.configure()` with an unexpected
+error, the cause is often the recipe pointing CMake at the WRONG source
+directory. To diagnose:
+
+1. Run the build with `--progress=plain` so all output is visible
+2. Look for the `WARN:` line that shows the recipe's source-folder detection
+3. Verify the cmake command at the end points at the RIGHT source path
+
+Example from the BoostMacros bug:
+```
+arrow/18.0.0: WARN: arrow: cmake source .../arrow.../b/cpp -> .../thrift.../b/src/tutorial/cpp
+```
+The `find` command in the recipe matched thrift's `tutorial/cpp/` before
+arrow's `cpp/cpp/`. Fix: scope the find to `self.source_folder` only.
+
+### Testing recipe changes without a full CI cycle
+
+```bash
+# Quick syntax check
+python3 -c "import ast; ast.parse(open('recipes/arrow/conanfile.py').read())"
+
+# Quick profile check (catches indentation issues)
+conan profile show -pr /tmp/conan-profiles/al2023
+
+# Build only the changed recipe locally
+# (requires the devcontainer to be running)
+conan remove 'arrow/*' --force
+conan export recipes/arrow
+conan install . --build=arrow -pr:h /tmp/conan-profiles/al2023 -pr:b /tmp/conan-profiles/al2023
+```

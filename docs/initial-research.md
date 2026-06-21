@@ -674,3 +674,100 @@ The official C++ RIC is **experimental** and has limitations:
 - [aws-lambda-runtime-interface-emulator](https://github.com/aws/aws-lambda-runtime-interface-emulator)
 - [northwood-labs RIE pattern](https://github.com/northwood-labs/local-lambda-environments-with-go)
 - [aws-sam-cli#7291 (debugging not supported for provided)](https://github.com/aws/aws-sam-cli/issues/7291)
+
+---
+
+## Appendix: Post-Implementation Findings (June 2026)
+
+This appendix records where the initial research above was validated,
+corrected, or extended by the actual CI implementation. Items here
+represent real-world findings that would have saved time if known
+during the research phase.
+
+### GCC 16 Build — CFLAGS Ordering
+
+**Initial research said** (§1): "Set `CFLAGS=-std=gnu11 -fgnu89-inline`
+globally to handle K&R C transitive deps."
+
+**Implementation found**: Setting `ENV CFLAGS` BEFORE the GCC build step
+causes the bootstrap compiler (AL2023's system GCC 11) to compile GCC
+16's own source in C11 mode. GCC 16's `i386.h:1722` uses `bool` without
+`<stdbool.h>`, expecting GNU C mode. C11 mode breaks this.
+
+**Correct approach** (matches `Containerfile.base`): set `ENV CFLAGS`
+AFTER the GCC build step, with value `-std=gnu17`. C17 keeps K&R C
+function declarations working in transitive deps without breaking
+GCC's own source. The Conan profile's `tools.build:cflags` adds
+`-Wno-error=implicit-function-declaration` as defense in depth.
+
+### Conan 2 — Cannot Use GitHub Packages as Binary Remote
+
+**Initial research assumed**: Conan 2 could use GitHub Packages as a
+binary cache, similar to how npm/maven packages work.
+
+**Implementation found**: GitHub Packages does NOT implement Conan's
+REST API v2 (`/v2/conans/{ref}/revisions/{rrev}/files`, etc.). Only
+GitLab has native Conan 2 registry support among forge platforms.
+
+**Workaround**: container-image-based caching on ghcr.io. Each build
+stage produces an OCI image with the Conan cache baked in. Images are
+tagged by content hash of their inputs. Pull-before-build at every
+stage; skip if hit. See [`ci-pipeline.md`](ci-pipeline.md).
+
+### Conan 2 — Consumer-Side Options Are CLI-Incompatible
+
+**Initial research assumed**: `conan install --requires=arrow/18.0.0`
+from CLI would produce the same binary as `conan install conanfile.py`
+that requires arrow/18.0.0.
+
+**Implementation found**: CLI `--requires` does NOT apply consumer-side
+options (e.g., `csv=False`, `json=False` for arrow) or version overrides
+(`boost/1.90.0` with `override=True`). It produces a binary variant
+matching the recipe's DEFAULTS, which may differ from what the project
+needs.
+
+**Impact on parallel CI**: splitting arrow and quantlib into parallel
+jobs requires per-library conanfiles (`arrow-conanfile.py`,
+`quantlib-conanfile.py`) that mirror the project's consumer options.
+Using `--requires` from CLI produces wrong variants that trigger full
+rebuilds at consume time.
+
+### Conan 2 — `conan install "name/version"` Is Path Lookup
+
+**Initial research assumed**: `conan install "arrow/18.0.0"` would
+install the arrow package by reference.
+
+**Implementation found**: Conan 2 preferentially treats `name/version`
+as a relative PATH lookup. With cwd `/tmp`, `arrow/18.0.0` is
+interpreted as `/tmp/arrow/18.0.0`. Error: `Conanfile not found at
+/tmp/arrow/18.0.0`.
+
+**Correct approach**: always install FROM a conanfile.py path, not
+by reference.
+
+### GH Actions Runner — Disk Space Insufficient for Boost Source
+
+**Initial research did not flag**: the `ubuntu-latest` runner's ~14 GB
+free disk space is insufficient for a cold Conan install of the full
+dependency graph.
+
+**Implementation found**: Boost source extraction alone creates ~5 GB
+of files (mostly HTML documentation we don't read). Combined with
+Arrow + QuantLib sources and build artifacts, the runner runs out of
+disk at the commit step.
+
+**Fix**: clear preinstalled toolchains (dotnet, android, ghc, swift,
+julia, firefox, powershell) at the start of each heavy job. Recovers
+~6 GB. Well-known GH Actions pattern for C++ projects.
+
+### GH Actions — CI Runners ~1.5x Slower Than Local
+
+**Initial research did not quantify**: CI vs local build time delta.
+
+**Implementation found**: GH Actions `ubuntu-latest` runners are
+~1.5x slower than a comparable local machine (same nominal core count),
+due to virtualization overhead and shared-tenant contention.
+
+**Impact**: time estimates based on local builds must be multiplied by
+~1.5x for CI. Per-job timeouts should be set to ~1.5x local time + 25%
+margin.

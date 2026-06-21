@@ -47,7 +47,8 @@ FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-small-deps:${SMALL_DEPS_TAG}
 RUN --mount=type=bind,from=arrow-cache,source=/root/.conan2,target=/tmp/arrow-conan \
     --mount=type=bind,from=quantlib-cache,source=/root/.conan2,target=/tmp/ql-conan \
     cp -rn /tmp/arrow-conan/. /root/.conan2/ && \
-    cp -rn /tmp/ql-conan/.    /root/.conan2/
+    cp -rn /tmp/ql-conan/.    /root/.conan2/ && \
+    find /root/.conan2/p -path "*/d/*" -type f -delete 2>/dev/null || true
 
 # Dev-only packages (NOT in upstream images because prod doesn't need them).
 RUN dnf install -y \

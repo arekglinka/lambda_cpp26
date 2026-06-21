@@ -140,6 +140,13 @@ podman run -d --entrypoint '[]' \
     -w "$WORKSPACE_DIR" \
     "$IMAGE" sleep 300 >/dev/null
 
+# Clean stale conan download cache (the cp -rn merge in CI assemble stage
+# can leave inconsistent d/ artifacts that cause "file already exists" errors
+# during conan install). Safe: only removes download backups, not extracted
+# recipes/binaries (those live in e/ and p/ subdirs).
+podman exec "$CONTAINER_NAME" \
+    find /root/.conan2/p -path "*/d/*" -type f -delete 2>/dev/null || true
+
 # Run the bootstrap script inside the container
 if ! podman exec -w "$WORKSPACE_DIR" "$CONTAINER_NAME" \
     ./scripts/bootstrap-workspace.sh 2>&1; then

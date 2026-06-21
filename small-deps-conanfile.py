@@ -46,3 +46,4 @@ class SmallDepsConanFile(ConanFile):
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.25 <4]")
+        self.tool_requires("ninja/[>=1.11 <2]")

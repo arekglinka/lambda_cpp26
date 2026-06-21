@@ -71,6 +71,11 @@ if [[ -f build/Release/compile_commands.json ]] && \
     log "build/Release/ already populated — running incremental rebuild to be safe."
     make -C build/Release sum_columns -j"$(nproc)"
 else
+    # Clean stale build-tool recipe exports that may be corrupted when the
+    # conan cache was assembled from multiple CI build stages (cp -rn merge).
+    # Build tools (ninja, cmake, b2, etc.) re-download from ConanCenter.
+    conan remove 'ninja/*' --force 2>/dev/null || true
+
     log "Running 'conan install' (cache hits fast since deps are baked into image)..."
     conan install . --build=missing \
         -pr:h "$PROFILE_HOST" \

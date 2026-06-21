@@ -1,10 +1,6 @@
 {
   "name": "lambda-cpp26-dev",
   "image": "ghcr.io/arekglinka/lambda_cpp26-dev:latest",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".."
-  },
   "customizations": {
     "vscode": {
       "extensions": [

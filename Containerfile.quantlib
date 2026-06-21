@@ -1,0 +1,29 @@
+# Containerfile.quantlib
+# =============================================================================
+# Builds ONLY QuantLib 1.38 on top of the small-deps cache.
+# Mirror of Containerfile.arrow for quantlib. The two run in parallel.
+#
+# Cache key (in devcontainer.yml): hash of recipes/quantlib/* + profiles/al2023
+# + conanfile.py + the small-deps tag.
+# =============================================================================
+ARG REGISTRY_OWNER=arekglinka
+ARG SMALL_DEPS_TAG=latest
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-small-deps:${SMALL_DEPS_TAG}
+
+COPY recipes/quantlib/      /tmp/recipes/quantlib/
+COPY profiles/al2023       /tmp/conan-profiles/al2023
+COPY quantlib-conanfile.py /tmp/quantlib-conanfile.py
+
+WORKDIR /tmp
+
+# Install transitives + quantlib only (NOT arrow — that's the parallel job's
+# responsibility). Uses quantlib-conanfile.py to keep cache state compatible
+# with small-deps (same transitive package_ids).
+RUN conan remove 'quantlib/*' --force 2>/dev/null || true && \
+    conan export /tmp/recipes/quantlib && \
+    conan install /tmp/quantlib-conanfile.py \
+        --build=missing \
+        -pr:h /tmp/conan-profiles/al2023 \
+        -pr:b /tmp/conan-profiles/al2023 \
+        -s:h build_type=Release && \
+    conan list 'quantlib/*' --cache

@@ -1,0 +1,36 @@
+# Containerfile.arrow
+# =============================================================================
+# Builds ONLY Apache Arrow 18.0.0 on top of the small-deps cache.
+# All transitives (boost, lz4, thrift, abseil, etc.) are inherited from the
+# small-deps parent image and become cache hits — only arrow itself compiles.
+#
+# Cache key (in devcontainer.yml): hash of recipes/arrow/* + profiles/al2023
+# + conanfile.py + the small-deps tag. An arrow recipe change rebuilds only
+# this image (~30 min); quantlib image stays cached.
+#
+# Consumer-side options (arrow csv/json=False, boost/1.90.0 override=True) are
+# applied because we install from the project's conanfile.py. The transitives
+# already match because small-deps used the same options.
+# =============================================================================
+ARG REGISTRY_OWNER=arekglinka
+ARG SMALL_DEPS_TAG=latest
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-small-deps:${SMALL_DEPS_TAG}
+
+COPY recipes/arrow/      /tmp/recipes/arrow/
+COPY profiles/al2023     /tmp/conan-profiles/al2023
+COPY arrow-conanfile.py  /tmp/arrow-conanfile.py
+
+WORKDIR /tmp
+
+# Install transitives + arrow only (NOT quantlib — that's the parallel job's
+# responsibility). Uses arrow-conanfile.py to apply the project's consumer
+# options (csv/json=False overrides) so the produced binary matches what the
+# project's conanfile.py would produce.
+RUN conan remove 'arrow/*' --force 2>/dev/null || true && \
+    conan export /tmp/recipes/arrow && \
+    conan install /tmp/arrow-conanfile.py \
+        --build=missing \
+        -pr:h /tmp/conan-profiles/al2023 \
+        -pr:b /tmp/conan-profiles/al2023 \
+        -s:h build_type=Release && \
+    conan list 'arrow/*' --cache

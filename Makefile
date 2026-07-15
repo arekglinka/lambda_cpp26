@@ -2,19 +2,26 @@
 # Lambda C++26 — pybind11 Extension Podman Build Orchestration
 # ============================================================
 
-IMAGE_NAME    ?= lambda-cpp26
-CONTAINERFILE ?= Containerfile
-BUILD_TYPE    ?= Release
+IMAGE_NAME     ?= lambda-cpp26
+MICROVM_IMAGE  ?= lambda-cpp26-microvm
+CONTAINERFILE  ?= Containerfile
+BUILD_TYPE     ?= Release
+# Container arch label: amd64 (x86_64) or arm64 (Graviton/aarch64). Drives the
+# --platform flag AND the TARGET_ARCH build-arg (which selects the per-arch
+# lambda_cpp26-base:<tag>-<arch> tag Conan auto-detects the toolchain arch from).
+TARGET_ARCH    ?= amd64
+PLATFORM       := linux/$(TARGET_ARCH)
 
-PODMAN        ?= podman
-PODMAN_BUILD  := $(PODMAN) build -f $(CONTAINERFILE)
-PODMAN_RUN    := $(PODMAN) run --rm
+PODMAN         ?= podman
+ARCH_ARGS      := --platform $(PLATFORM) --build-arg TARGET_ARCH=$(TARGET_ARCH)
+PODMAN_BUILD   := $(PODMAN) build -f $(CONTAINERFILE) $(ARCH_ARGS)
+PODMAN_RUN     := $(PODMAN) run --rm
 
 # Size budget for the stripped .so (80 MB — research bg_9aeab9a8 estimate
 # for Arrow core+parquet+compute+QuantLib, no AWS SDK).
-SIZE_BUDGET   ?= 83886080
+SIZE_BUDGET    ?= 83886080
 
-.PHONY: all build test ci sample clean shell help
+.PHONY: all build test ci microvm microvm-run sample clean shell help
 
 all: build
 
@@ -78,6 +85,17 @@ run: test ## Start the test image via RIE and invoke the handler
 	@$(PODMAN) rm lambda-test > /dev/null 2>&1 || true
 	@echo "==> Done"
 
+# ---- MicroVM image (standalone AL2023, no Lambda RIC) ----
+
+microvm: ## Build the standalone MicroVM image (Containerfile.microvm)
+	@echo "==> Building MicroVM image ($(TARGET_ARCH))..."
+	$(PODMAN) build -f Containerfile.microvm $(ARCH_ARGS) \
+		-t $(MICROVM_IMAGE):$(TARGET_ARCH)
+	@echo "==> MicroVM image ready: $(MICROVM_IMAGE):$(TARGET_ARCH)"
+
+microvm-run: microvm ## Run the MicroVM batch compute once (prints option prices)
+	$(PODMAN_RUN) $(MICROVM_IMAGE):$(TARGET_ARCH)
+
 # ---- Utilities ----
 
 sample: ## Regenerate data/sample.parquet
@@ -94,6 +112,7 @@ clean: ## Remove images and clean build artifacts
 	@echo "==> Cleaning..."
 	$(PODMAN) rmi -f $(IMAGE_NAME):builder 2>/dev/null || true
 	$(PODMAN) rmi -f $(IMAGE_NAME):test 2>/dev/null || true
+	$(PODMAN) rmi -f $(MICROVM_IMAGE):amd64 $(MICROVM_IMAGE):arm64 2>/dev/null || true
 	$(PODMAN) image prune -f 2>/dev/null || true
 	rm -f sum_columns.so
 	@echo "==> Clean"

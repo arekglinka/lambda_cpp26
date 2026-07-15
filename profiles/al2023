@@ -2,10 +2,18 @@
 #
 # Usage:
 #   conan install . --profile=profiles/al2023 --build=missing
+#
+# Architecture is intentionally OMITTED so Conan 2 auto-detects it from the
+# builder container's native platform (x86_64 on amd64 runners, aarch64 on
+# arm64/Graviton runners). This lets a single profile drive BOTH Lambda
+# function + MicroVM image builds for both architectures — each builder
+# container is spun up with `podman build --platform linux/<arch>` and runs
+# GCC 16 natively, so Conan resolves arch from the build environment. Do NOT
+# pin `arch=` here or every arm64 build would try to reuse x86_64 binaries
+# from the cache and fail at link time.
 
 [settings]
 os=Linux
-arch=x86_64
 compiler=gcc
 compiler.version=16
 compiler.cppstd=17

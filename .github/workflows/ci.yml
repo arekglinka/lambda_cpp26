@@ -11,17 +11,44 @@ permissions:
   packages: write
 
 env:
+  OWNER: ${{ github.repository_owner }}
   IMAGE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26
   BASE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26-base
+  MICROVM: ghcr.io/${{ github.repository_owner }}/lambda_cpp26-microvm
+  SIZE_BUDGET: 83886080   # 80 MB stripped .so budget
+
+# =============================================================================
+# Builds FOUR images per release — Lambda function (Containerfile, slim, ships
+# the awslambdaric RIC) × MicroVM (Containerfile.microvm, plain AL2023, no
+# RIC) × {amd64, arm64}. Each arch builds NATIVELY on its own runner
+# (ubuntu-24.04-arm for Graviton — no QEMU), so the base image is cached PER
+# ARCH and Conan's arch-agnostic profiles/al2023 resolves x86_64/aarch64 from
+# the builder platform. A manifest job also publishes multi-arch :latest tags.
+# =============================================================================
 
 jobs:
-  base:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     outputs:
-      base_tag: ${{ steps.hash.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, platform: linux/amd64, runner: ubuntu-latest }
+          - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v4
+
+      - name: Ensure podman
+        # ubuntu-latest ships podman; the arm64 preview runner may not — install on demand.
+        run: command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Hash base inputs
         id: hash
@@ -31,40 +58,7 @@ jobs:
                 recipes/quantlib/conanfile.py recipes/quantlib/conandata.yml \
               | sha256sum | cut -c1-16)
           echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "Base tag: $HASH"
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Check if base image exists
-        id: check
-        run: |
-          if podman pull ${{ env.BASE }}:${{ steps.hash.outputs.tag }} 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Base image cached — skipping rebuild"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Base image not found — will rebuild"
-          fi
-
-      - name: Build + push base image
-        if: steps.check.outputs.exists != 'true'
-        run: |
-          podman build \
-            -f Containerfile.base \
-            -t ${{ env.BASE }}:${{ steps.hash.outputs.tag }} \
-            -t ${{ env.BASE }}:latest \
-            .
-          podman push ${{ env.BASE }}:${{ steps.hash.outputs.tag }}
-          podman push ${{ env.BASE }}:latest
-          echo "::notice::Built new base image (${{ steps.hash.outputs.tag }})"
-
-  build-test-publish:
-    needs: base
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
+          echo "Base tag: $HASH (arch ${{ matrix.arch }})"
 
       - name: Determine version
         id: version
@@ -76,44 +70,120 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build + test (fast — base cached)
+      - name: Base image (per-arch, content-hash cached)
         run: |
-          podman build \
-            --build-arg BASE_TAG=${{ needs.base.outputs.base_tag }} \
-            --build-arg REGISTRY_OWNER=${{ github.repository_owner }} \
+          if podman pull ${{ env.BASE }}:${{ steps.hash.outputs.tag }}-${{ matrix.arch }} 2>/dev/null; then
+            echo "Base image cached — skipping rebuild"
+          else
+            echo "Base image not found — building (${{ matrix.arch }})..."
+            podman build --platform ${{ matrix.platform }} \
+              -f Containerfile.base \
+              -t ${{ env.BASE }}:${{ steps.hash.outputs.tag }}-${{ matrix.arch }} \
+              -t ${{ env.BASE }}:latest-${{ matrix.arch }} \
+              .
+            podman push ${{ env.BASE }}:${{ steps.hash.outputs.tag }}-${{ matrix.arch }}
+            podman push ${{ env.BASE }}:latest-${{ matrix.arch }}
+            echo "::notice::Built base image (${{ steps.hash.outputs.tag }}-${{ matrix.arch }})"
+          fi
+
+      - name: Build Lambda function image (slim, RIC + CMD handler)
+        run: |
+          podman build --platform ${{ matrix.platform }} \
+            --build-arg BASE_TAG=${{ steps.hash.outputs.tag }} \
+            --build-arg TARGET_ARCH=${{ matrix.arch }} \
             --target test \
-            -t lambda-cpp26:test \
-            -t ${{ env.IMAGE }}:${{ steps.version.outputs.version }} \
-            -t ${{ env.IMAGE }}:latest \
+            -t lambda-cpp26:test-${{ matrix.arch }} \
+            -t ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }} \
+            -t ${{ env.IMAGE }}:latest-${{ matrix.arch }} \
             -f Containerfile .
 
-      - name: Extract .so + size check
+      - name: Build MicroVM image (standalone AL2023, no Lambda RIC)
         run: |
-          podman run --rm --entrypoint sh lambda-cpp26:test \
-            -c 'cat /var/task/sum_columns.so' > sum_columns.so
-          SIZE=$(stat -c%s sum_columns.so)
-          echo "Extension size: $SIZE bytes ($((SIZE / 1048576)) MB)"
-          if [ "$SIZE" -gt 83886080 ]; then
+          podman build --platform ${{ matrix.platform }} \
+            --build-arg BASE_TAG=${{ steps.hash.outputs.tag }} \
+            --build-arg TARGET_ARCH=${{ matrix.arch }} \
+            -t ${{ env.MICROVM }}:${{ steps.version.outputs.version }}-${{ matrix.arch }} \
+            -t ${{ env.MICROVM }}:latest-${{ matrix.arch }} \
+            -f Containerfile.microvm .
+
+      - name: Extract .so + size-budget check
+        run: |
+          podman run --rm --entrypoint sh lambda-cpp26:test-${{ matrix.arch }} \
+            -c 'cat /var/task/sum_columns.so' > sum_columns-${{ matrix.arch }}.so
+          SIZE=$(stat -c%s sum_columns-${{ matrix.arch }}.so)
+          echo "Extension size (${{ matrix.arch }}): $SIZE bytes ($((SIZE / 1048576)) MB)"
+          if [ "$SIZE" -gt ${{ env.SIZE_BUDGET }} ]; then
             echo "FAIL: .so exceeds 80 MB budget"
             exit 1
           fi
 
-      - name: Push image to ghcr.io
+      - name: Push Lambda function image
         run: |
-          podman push ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
-          podman push ${{ env.IMAGE }}:latest
+          podman push ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          podman push ${{ env.IMAGE }}:latest-${{ matrix.arch }}
 
-      - name: Create GitHub Release with .so asset
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Push MicroVM image
         run: |
+          podman push ${{ env.MICROVM }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          podman push ${{ env.MICROVM }}:latest-${{ matrix.arch }}
+
+      - name: Upload .so artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sum_columns-${{ matrix.arch }}
+          path: sum_columns-${{ matrix.arch }}.so
+          retention-days: 7
+
+  manifest:
+    name: Multi-arch manifests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Create + push multi-arch manifests (:latest + :version)
+        run: |
+          V="${{ needs.build.outputs.version }}"
+          for IMG in "${{ env.IMAGE }}" "${{ env.MICROVM }}"; do
+            echo "::group::$IMG"
+            podman manifest create "$IMG:latest"
+            podman manifest add   "$IMG:latest" "$IMG:latest-amd64"
+            podman manifest add   "$IMG:latest" "$IMG:latest-arm64"
+            podman manifest push  "$IMG:latest"
+
+            podman manifest create "$IMG:$V"
+            podman manifest add   "$IMG:$V" "$IMG:$V-amd64"
+            podman manifest add   "$IMG:$V" "$IMG:$V-arm64"
+            podman manifest push  "$IMG:$V"
+            echo "::endgroup::"
+          done
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all .so artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release with both arch .so assets
+        run: |
+          ls -lh artifacts/
+          SIZE_AMD=$(stat -c%s artifacts/sum_columns-amd64.so)
+          SIZE_ARM=$(stat -c%s artifacts/sum_columns-arm64.so)
           gh release create "${{ github.ref_name }}" \
-            sum_columns.so \
+            artifacts/sum_columns-amd64.so \
+            artifacts/sum_columns-arm64.so \
             --title "${{ github.ref_name }}" \
             --notes "Lambda C++26 extension — Arrow C++ 18 + QuantLib 1.38
 
-          Size: $(stat -c%s sum_columns.so) bytes ($(($(stat -c%s sum_columns.so) / 1048576)) MB)"
+          Architectures: x86_64 (amd64) + arm64/Graviton (aarch64)
+          - sum_columns-amd64.so: $SIZE_AMD bytes ($((SIZE_AMD / 1048576)) MB)
+          - sum_columns-arm64.so: $SIZE_ARM bytes ($((SIZE_ARM / 1048576)) MB)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

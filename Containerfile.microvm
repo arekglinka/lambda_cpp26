@@ -1,0 +1,86 @@
+# =============================================================================
+# Containerfile.microvm — standalone generic MicroVM image (NO Lambda RIC)
+# =============================================================================
+#
+# Sibling to `Containerfile`, which produces the AWS-Lambda-deployable image
+# (`FROM public.ecr.aws/lambda/python:3.12`, ships the `awslambdaric` Runtime
+# Interface Client, `CMD ["handler.lambda_handler"]`). This file produces a
+# DIFFERENT image family: a self-contained Amazon Linux 2023 appliance with
+# the C++ extension + pyarrow + handler, runnable directly under
+# `podman`/`docker`, on EC2, or on a bare Firecracker microVM — anywhere there
+# is no Lambda Runtime API to poll.
+#
+# Default CMD runs the option-pricing compute once as a batch job (reads the
+# bundled parquet, writes /tmp/option_prices.parquet, prints the result JSON).
+#
+# Architecture (built per-arch by ci.yml):
+#   podman build --platform linux/arm64 \
+#       --build-arg TARGET_ARCH=arm64 -f Containerfile.microvm .
+# The builder stage inherits GCC 16 + Arrow + QuantLib for the matching arch
+# from `lambda_cpp26-base:<tag>-<arch>`. Conan's al2023 profile auto-detects
+# arch (aarch64 on arm64 runners), so the same Containerfile serves both.
+# =============================================================================
+
+ARG BASE_TAG=latest
+ARG REGISTRY_OWNER=arekglinka
+ARG TARGET_ARCH=amd64
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-base:${BASE_TAG}-${TARGET_ARCH} AS builder
+
+ARG BUILD_TYPE=Release
+
+COPY src/ src/
+COPY tests/ tests/
+
+RUN conan build . \
+        -pr:h /tmp/conan-profiles/al2023 \
+        -pr:b /tmp/conan-profiles/al2023
+
+RUN find build -name "sum_columns*.so" -exec cp {} /tmp/sum_columns.so \; && \
+    strip --strip-unneeded /tmp/sum_columns.so || true
+
+# ============================================================
+# Stage 2: generic Amazon Linux 2023 runtime (no Lambda RIC)
+# ============================================================
+# AL2023 (not lambda/python) on purpose: this image must boot anywhere a plain
+# container runs, not just inside the Lambda service. amazonlinux:2023 is a
+# multi-arch manifest (amd64 + arm64), so `--platform` selects the variant.
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS microvm
+
+# AL2023 ships Python 3.12 as the system interpreter. pyarrow is a manylinux
+# wheel — installs cleanly on AL2023's glibc 2.34 without compilation.
+RUN dnf install -y python3.12 python3.12-pip && \
+    dnf clean all && \
+    python3.12 -m pip install --no-cache-dir --upgrade pip && \
+    python3.12 -m pip install --no-cache-dir "pyarrow>=15.0"
+
+# GCC 16 runtime libs the .so dynamically links (GLIBCXX_3.4.35 / newer than
+# AL2023's stock libstdc++). /usr/lib64 is on ld.so's default search path.
+# Resolved + dereferenced so the libstdc++.so.6 symlink target comes along.
+COPY --from=builder /opt/gcc16/lib64/libstdc++.so.6 /usr/lib64/libstdc++.so.6
+COPY --from=builder /opt/gcc16/lib64/libgcc_s.so.1 /usr/lib64/libgcc_s.so.1
+RUN chmod a+r /usr/lib64/libstdc++.so.6 /usr/lib64/libgcc_s.so.1 && \
+    ldconfig
+
+# The extension + handler + bundled sample data. /opt/lambda_cpp26 is the
+# image's app root (NOT /var/task — that path is a Lambda-service-ism this
+# image deliberately avoids so it's portable off Lambda).
+COPY --from=builder /tmp/sum_columns.so      /opt/lambda_cpp26/sum_columns.so
+COPY handler.py                              /opt/lambda_cpp26/handler.py
+COPY data/                                   /opt/lambda_cpp26/data/
+COPY scripts/microvm_entry.py                /opt/lambda_cpp26/microvm_entry.py
+
+WORKDIR /opt/lambda_cpp26
+ENV PYTHONPATH=/opt/lambda_cpp26
+ENV LD_LIBRARY_PATH=/usr/lib64:/opt/lambda_cpp26
+
+# Build-time sanity gate: the .so must import + the batch compute must run
+# end-to-end, else the image build fails (fail-fast on a broken extension).
+RUN chmod a+r /opt/lambda_cpp26/sum_columns.so && \
+    python3.12 -c "import sum_columns; print('import OK')" && \
+    python3.12 /opt/lambda_cpp26/microvm_entry.py && \
+    ldd /opt/lambda_cpp26/sum_columns.so
+
+# Default: run the option-pricing batch once. Override freely, e.g.:
+#   podman run -it <img> python3.12                     # interactive REPL
+#   podman run <img> python3.12 -c "import sum_columns; ..."
+CMD ["python3.12", "/opt/lambda_cpp26/microvm_entry.py"]

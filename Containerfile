@@ -1,5 +1,10 @@
 ARG BASE_TAG=latest
-FROM ghcr.io/${REGISTRY_OWNER:-arekglinka}/lambda_cpp26-base:${BASE_TAG} AS builder
+ARG REGISTRY_OWNER=arekglinka
+# Selects the per-architecture base image (lambda_cpp26-base:<tag>-<arch>).
+# CI passes --build-arg TARGET_ARCH=arm64 alongside --platform linux/arm64
+# for Graviton builds. Default amd64 preserves local `podman build` behaviour.
+ARG TARGET_ARCH=amd64
+FROM ghcr.io/${REGISTRY_OWNER}/lambda_cpp26-base:${BASE_TAG}-${TARGET_ARCH} AS builder
 
 ARG BUILD_TYPE=Release
 

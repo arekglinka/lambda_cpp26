@@ -1,13 +1,14 @@
-# Conan 2.x host profile for Amazon Linux 2023 (AWS Lambda runtime), x86_64.
-# Sibling: profiles/al2023-arm64 for arm64/Graviton (Conan arch=armv8).
+# Conan 2.x host profile for Amazon Linux 2023, arm64/Graviton (AWS Lambda arm64).
+# Conan's settings.arch value for 64-bit ARM is `armv8` (NOT `aarch64`, which
+# Conan rejects). Sibling: profiles/al2023 for x86_64 (arch=x86_64).
 # Containerfile.base selects between them via the CONAN_PROFILE build-arg.
 #
 # Usage:
-#   conan install . --profile=profiles/al2023 --build=missing
+#   conan install . --profile=profiles/al2023-arm64 --build=missing
 
 [settings]
 os=Linux
-arch=x86_64
+arch=armv8
 compiler=gcc
 compiler.version=16
 compiler.cppstd=17

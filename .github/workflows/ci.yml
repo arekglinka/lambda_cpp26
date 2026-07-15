@@ -38,8 +38,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: amd64, platform: linux/amd64, runner: ubuntu-latest }
-          - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+          - { arch: amd64, platform: linux/amd64, runner: ubuntu-latest,    conan_profile: al2023 }
+          - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm, conan_profile: al2023-arm64 }
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +77,7 @@ jobs:
           else
             echo "Base image not found — building (${{ matrix.arch }})..."
             podman build --platform ${{ matrix.platform }} \
+              --build-arg CONAN_PROFILE=${{ matrix.conan_profile }} \
               -f Containerfile.base \
               -t ${{ env.BASE }}:${{ steps.hash.outputs.tag }}-${{ matrix.arch }} \
               -t ${{ env.BASE }}:latest-${{ matrix.arch }} \
@@ -91,6 +92,7 @@ jobs:
           podman build --platform ${{ matrix.platform }} \
             --build-arg BASE_TAG=${{ steps.hash.outputs.tag }} \
             --build-arg TARGET_ARCH=${{ matrix.arch }} \
+            --build-arg CONAN_PROFILE=${{ matrix.conan_profile }} \
             --target test \
             -t lambda-cpp26:test-${{ matrix.arch }} \
             -t ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }} \
@@ -102,6 +104,7 @@ jobs:
           podman build --platform ${{ matrix.platform }} \
             --build-arg BASE_TAG=${{ steps.hash.outputs.tag }} \
             --build-arg TARGET_ARCH=${{ matrix.arch }} \
+            --build-arg CONAN_PROFILE=${{ matrix.conan_profile }} \
             -t ${{ env.MICROVM }}:${{ steps.version.outputs.version }}-${{ matrix.arch }} \
             -t ${{ env.MICROVM }}:latest-${{ matrix.arch }} \
             -f Containerfile.microvm .

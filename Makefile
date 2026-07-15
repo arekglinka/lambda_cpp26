@@ -11,9 +11,12 @@ BUILD_TYPE     ?= Release
 # lambda_cpp26-base:<tag>-<arch> tag Conan auto-detects the toolchain arch from).
 TARGET_ARCH    ?= amd64
 PLATFORM       := linux/$(TARGET_ARCH)
+# Conan settings.arch for 64-bit ARM is `armv8` (not `aarch64`); Conan won't
+# auto-detect arch from a hand-written profile, so each arch has its own profile.
+CONAN_PROFILE  := $(if $(filter arm64,$(TARGET_ARCH)),al2023-arm64,al2023)
 
 PODMAN         ?= podman
-ARCH_ARGS      := --platform $(PLATFORM) --build-arg TARGET_ARCH=$(TARGET_ARCH)
+ARCH_ARGS      := --platform $(PLATFORM) --build-arg TARGET_ARCH=$(TARGET_ARCH) --build-arg CONAN_PROFILE=$(CONAN_PROFILE)
 PODMAN_BUILD   := $(PODMAN) build -f $(CONTAINERFILE) $(ARCH_ARGS)
 PODMAN_RUN     := $(PODMAN) run --rm
 

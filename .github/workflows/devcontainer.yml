@@ -68,3 +68,21 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Teammates: \`git pull\` then Reopen in Container — VSCode will pull the new image automatically." >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Environment suite in the published dev image (GPU test skips on CI)
+        run: |
+          podman run --rm --entrypoint python3 \
+            -v "${PWD}/tests:/workspaces/lambda_cpp26/tests:Z" \
+            -w /workspaces/lambda_cpp26 \
+            ghcr.io/${OWNER}/lambda_cpp26-dev:latest \
+            -m pytest tests/test_environment.py -v

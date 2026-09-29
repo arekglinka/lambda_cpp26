@@ -1,0 +1,27 @@
+=== E2E P0 Baselines (2026-09-29T10:15:29Z) ===
+
+-- stage hashes --
+toolchain: e086a1a8e997f6b2
+python-stack: 031006d01ca4eb49
+conan-deps: a66997bffd3aa0f5
+agents: 9865497dbf5e848a
+
+-- existing :latest digests --
+DEFERRED-PAT (captured in e2e-p0-ghcr-auth.txt after login)
+
+-- machine snapshot --
+disk: used 106G / free 850G (12%)
+podman:
+TYPE           TOTAL       ACTIVE      SIZE        RECLAIMABLE
+Images         155         35          35.59GB     34.43GB (97%)
+Containers     2           0           2.864GB     2.864GB (100%)
+Local Volumes  3           1           5.669GB     3.776GB (67%)
+vsc containers: 0 (inventory)
+git HEAD: 7148d7d25b3f90af83cf126e720a31866f67aeeb
+staged:  22 files changed, 1452 insertions(+), 127 deletions(-)
+
+== REBASE UPDATE (10:23:54Z) ==
+Remote June-21 line merged (our line won 4 conflicts; adopted remote's image-only devcontainer.json).
+conan-deps: a66997bffd3aa0f5 -> 818d4de449febffa (remote recipe/profile fixes flowed in)
+agents: 9865497dbf5e848a -> 28a714d4fe5f694f (descendant)
+toolchain/python unchanged: e086a1a8e997f6b2 / 031006d01ca4eb49

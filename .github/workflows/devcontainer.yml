@@ -5,22 +5,17 @@ on:
     branches: [main]
     paths:
       - .devcontainer/**
+      - Containerfile.base
       - recipes/**
       - profiles/**
       - src/**
       - conanfile.py
-      - small-deps-conanfile.py
-      - arrow-conanfile.py
-      - quantlib-conanfile.py
-      - Containerfile.gcc-base
-      - Containerfile.small-deps
-      - Containerfile.arrow
-      - Containerfile.quantlib
+      - scripts/build-devcontainer.sh
       - .github/workflows/devcontainer.yml
+      - .github/workflows/base-image.yml
   workflow_dispatch:
   schedule:
-    # Weekly rebuild. Intermediate images are content-hash cached, so this
-    # only does work if the ECR base image or our Dockerfiles changed.
+    # Rebuild weekly to pick up base-image security updates from ECR.
     - cron: '0 3 * * 0'
 
 permissions:
@@ -30,327 +25,46 @@ permissions:
 env:
   OWNER: ${{ github.repository_owner }}
 
-# =============================================================================
-# Five jobs, four of them cacheable:
-#
-#   gcc-base ──► small-deps ──► arrow ──┐
-#                            ──►        ├──► assemble-devcontainer
-#                            ──► quantlib ──┘
-#                            (parallel)
-#
-# Cold cache:    ~60 min  (gcc 1 + small-deps 20 + parallel[arrow 30 ‖ quantlib 30] + assemble 5)
-# Warm cache:    ~5 min   (just assemble)
-# Recipe change: only the affected stage rebuilds + assemble (~5 min assemble + one stage)
-#
-# Why this works (when previous parallel attempts failed):
-# 1. arrow and quantlib images both FROM small-deps (common ancestor). Their
-#    conan caches share IDENTICAL transitives. cp -rn merge in assemble is
-#    conflict-free — only the deltas (arrow/quantlib binaries) get copied.
-# 2. Per-library conanfiles (arrow-conanfile.py, quantlib-conanfile.py) apply
-#    the project's consumer options (csv/json=False for arrow, etc.) so each
-#    parallel job produces the same binary variant the project's conanfile.py
-#    would. Previous attempts used --requires=arrow/18.0.0 which skipped
-#    consumer options and produced a wrong variant.
-# =============================================================================
-
 jobs:
+  base:
+    uses: ./.github/workflows/base-image.yml
 
-  gcc-base:
-    name: GCC base
+  build-and-push:
+    needs: base
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    outputs:
-      tag: ${{ steps.hash.outputs.tag }}
-      cache_hit: ${{ steps.check.outputs.cache_hit }}
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Hash inputs (this Dockerfile only)
-        id: hash
+      - name: Configure Podman (rootful, matching local dev setup)
         run: |
-          HASH=$(sha256sum Containerfile.gcc-base | awk '{print substr($1,1,16)}')
-          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "GCC base tag: $HASH"
+          sudo systemctl enable --now podman.socket
 
-      - name: Check cache hit
-        id: check
+      - name: Log in to ghcr.io (must precede build script, which pushes)
         run: |
-          if podman pull ghcr.io/${OWNER}/lambda_cpp26-gcc-base:${{ steps.hash.outputs.tag }}; then
-            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "Cache hit — skipping GCC rebuild"
-          else
-            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
-            echo "Cache miss — will rebuild GCC (~25 min)"
-          fi
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            podman login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Build + push GCC base
-        if: steps.check.outputs.cache_hit != 'true'
+      - name: Pull granular base stages (warm buildah cache for the prep build)
         run: |
-          podman build -f Containerfile.gcc-base \
-            -t ghcr.io/${OWNER}/lambda_cpp26-gcc-base:${{ steps.hash.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-gcc-base:latest \
-            .
-          podman push ghcr.io/${OWNER}/lambda_cpp26-gcc-base:${{ steps.hash.outputs.tag }}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-gcc-base:latest
-          echo "::notice::Built gcc-base ${{ steps.hash.outputs.tag }}"
+          TAG="${{ needs.base.outputs.base_tag }}"
+          podman pull "ghcr.io/${OWNER}/lambda_cpp26-base:${TAG}" || true
 
-  small-deps:
-    name: Small deps (transitives only)
-    needs: gcc-base
-    runs-on: ubuntu-latest
-    # Cold build: ~30-35 min on GH runners (boost source + thrift + openssl
-    # + abseil compile). Local was ~20 min but CI runners are ~1.5x slower.
-    timeout-minutes: 45
-    outputs:
-      tag: ${{ steps.hash.outputs.tag }}
-      cache_hit: ${{ steps.check.outputs.cache_hit }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Free up runner disk space
-        # ubuntu-latest runners ship ~14 GB free; boost source alone is ~5 GB.
-        # Clear preinstalled toolchains we don't use to recover ~6 GB.
+      - name: Build + bake Conan deps + commit + push
         run: |
-          sudo rm -rf /usr/share/dotnet                       \
-                      /usr/local/lib/android                  \
-                      /opt/ghc                                \
-                      /opt/hostedtoolcache/CodeQL             \
-                      /usr/local/.ghcup                       \
-                      /usr/local/share/boost                  \
-                      /opt/swift                              \
-                      /usr/local/julia*                       \
-                      /usr/lib/firefox                        \
-                      /opt/microsoft/powershell               \
-                      /usr/share/swift                        2>/dev/null || true
-          sudo apt-get clean
-          df -h /
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Hash inputs (small-deps-conanfile.py + profile + gcc-base tag)
-        id: hash
-        run: |
-          CONTENT_HASH=$(cat small-deps-conanfile.py profiles/al2023 | sha256sum | awk '{print substr($1,1,16)}')
-          HASH="${CONTENT_HASH}-${{ needs.gcc-base.outputs.tag }}"
-          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "Small deps tag: $HASH"
-
-      - name: Check cache hit
-        id: check
-        run: |
-          if podman pull ghcr.io/${OWNER}/lambda_cpp26-small-deps:${{ steps.hash.outputs.tag }}; then
-            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "Cache hit — skipping small-deps rebuild"
-          else
-            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
-            echo "Cache miss — will build transitives (~20 min)"
-          fi
-
-      - name: Build + push small-deps
-        if: steps.check.outputs.cache_hit != 'true'
-        run: |
-          podman build -f Containerfile.small-deps \
-            --build-arg REGISTRY_OWNER=${OWNER} \
-            --build-arg GCC_TAG=${{ needs.gcc-base.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-small-deps:${{ steps.hash.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-small-deps:latest \
-            .
-          podman push ghcr.io/${OWNER}/lambda_cpp26-small-deps:${{ steps.hash.outputs.tag }}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-small-deps:latest
-          echo "::notice::Built small-deps ${{ steps.hash.outputs.tag }}"
-
-  arrow:
-    name: Arrow deps (parallel)
-    needs: small-deps
-    runs-on: ubuntu-latest
-    # Cold build: ~30 min (arrow compile only; transitives cached from small-deps).
-    timeout-minutes: 45
-    outputs:
-      tag: ${{ steps.hash.outputs.tag }}
-      cache_hit: ${{ steps.check.outputs.cache_hit }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Free up runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet                       \
-                      /usr/local/lib/android                  \
-                      /opt/ghc                                \
-                      /opt/hostedtoolcache/CodeQL             \
-                      /usr/local/.ghcup                       \
-                      /usr/local/share/boost                  \
-                      /opt/swift                              \
-                      /usr/local/julia*                       \
-                      /usr/lib/firefox                        \
-                      /opt/microsoft/powershell               \
-                      /usr/share/swift                        2>/dev/null || true
-          sudo apt-get clean
-          df -h /
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Hash inputs (arrow recipe + arrow-conanfile.py + profile + small-deps tag)
-        id: hash
-        run: |
-          CONTENT_HASH=$(cat recipes/arrow/conanfile.py recipes/arrow/conandata.yml \
-                              arrow-conanfile.py profiles/al2023 \
-                        | sha256sum | awk '{print substr($1,1,16)}')
-          HASH="${CONTENT_HASH}-${{ needs.small-deps.outputs.tag }}"
-          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "Arrow tag: $HASH"
-
-      - name: Check cache hit
-        id: check
-        run: |
-          if podman pull ghcr.io/${OWNER}/lambda_cpp26-arrow:${{ steps.hash.outputs.tag }}; then
-            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "Cache hit — skipping arrow rebuild"
-          else
-            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
-            echo "Cache miss — will build arrow (~30 min)"
-          fi
-
-      - name: Build + push arrow
-        if: steps.check.outputs.cache_hit != 'true'
-        run: |
-          podman build -f Containerfile.arrow \
-            --build-arg REGISTRY_OWNER=${OWNER} \
-            --build-arg SMALL_DEPS_TAG=${{ needs.small-deps.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-arrow:${{ steps.hash.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-arrow:latest \
-            .
-          podman push ghcr.io/${OWNER}/lambda_cpp26-arrow:${{ steps.hash.outputs.tag }}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-arrow:latest
-          echo "::notice::Built arrow ${{ steps.hash.outputs.tag }}"
-
-  quantlib:
-    name: QuantLib deps (parallel)
-    needs: small-deps
-    runs-on: ubuntu-latest
-    # Cold build: ~30 min (quantlib compile only; transitives cached).
-    timeout-minutes: 45
-    outputs:
-      tag: ${{ steps.hash.outputs.tag }}
-      cache_hit: ${{ steps.check.outputs.cache_hit }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Free up runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet                       \
-                      /usr/local/lib/android                  \
-                      /opt/ghc                                \
-                      /opt/hostedtoolcache/CodeQL             \
-                      /usr/local/.ghcup                       \
-                      /usr/local/share/boost                  \
-                      /opt/swift                              \
-                      /usr/local/julia*                       \
-                      /usr/lib/firefox                        \
-                      /opt/microsoft/powershell               \
-                      /usr/share/swift                        2>/dev/null || true
-          sudo apt-get clean
-          df -h /
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Hash inputs (quantlib recipe + quantlib-conanfile.py + profile + small-deps tag)
-        id: hash
-        run: |
-          CONTENT_HASH=$(cat recipes/quantlib/conanfile.py recipes/quantlib/conandata.yml \
-                              quantlib-conanfile.py profiles/al2023 \
-                        | sha256sum | awk '{print substr($1,1,16)}')
-          HASH="${CONTENT_HASH}-${{ needs.small-deps.outputs.tag }}"
-          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "QuantLib tag: $HASH"
-
-      - name: Check cache hit
-        id: check
-        run: |
-          if podman pull ghcr.io/${OWNER}/lambda_cpp26-quantlib:${{ steps.hash.outputs.tag }}; then
-            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "Cache hit — skipping quantlib rebuild"
-          else
-            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
-            echo "Cache miss — will build quantlib (~30 min)"
-          fi
-
-      - name: Build + push quantlib
-        if: steps.check.outputs.cache_hit != 'true'
-        run: |
-          podman build -f Containerfile.quantlib \
-            --build-arg REGISTRY_OWNER=${OWNER} \
-            --build-arg SMALL_DEPS_TAG=${{ needs.small-deps.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-quantlib:${{ steps.hash.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-quantlib:latest \
-            .
-          podman push ghcr.io/${OWNER}/lambda_cpp26-quantlib:${{ steps.hash.outputs.tag }}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-quantlib:latest
-          echo "::notice::Built quantlib ${{ steps.hash.outputs.tag }}"
-
-  assemble-devcontainer:
-    name: Assemble devcontainer
-    needs: [gcc-base, small-deps, arrow, quantlib]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build assembled devcontainer
-        run: |
-          SHORT_SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
-          DATE_TAG="dev-$(date -u +%Y%m%d)"
-
-          podman build -f .devcontainer/Dockerfile \
-            --build-arg REGISTRY_OWNER=${OWNER} \
-            --build-arg SMALL_DEPS_TAG=${{ needs.small-deps.outputs.tag }} \
-            --build-arg ARROW_TAG=${{ needs.arrow.outputs.tag }} \
-            --build-arg QUANTLIB_TAG=${{ needs.quantlib.outputs.tag }} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-dev:${SHORT_SHA} \
-            -t ghcr.io/${OWNER}/lambda_cpp26-dev:latest \
-            -t ghcr.io/${OWNER}/lambda_cpp26-dev:${DATE_TAG} \
-            .
-
-      - name: Push all tags
-        run: |
-          SHORT_SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
-          DATE_TAG="dev-$(date -u +%Y%m%d)"
-          podman push ghcr.io/${OWNER}/lambda_cpp26-dev:${SHORT_SHA}
-          podman push ghcr.io/${OWNER}/lambda_cpp26-dev:latest
-          podman push ghcr.io/${OWNER}/lambda_cpp26-dev:${DATE_TAG}
+          ./scripts/build-devcontainer.sh
+        env:
+          PUSH: "1"
 
       - name: Summary
         if: always()
         run: |
-          SHORT_SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
-          DATE_TAG="dev-$(date -u +%Y%m%d)"
-          ARROW_STATUS="rebuilt"
-          QUANTLIB_STATUS="rebuilt"
-          [ "${{ needs.arrow.outputs.cache_hit }}" = "true" ]    && ARROW_STATUS="cache hit"
-          [ "${{ needs.quantlib.outputs.cache_hit }}" = "true" ] && QUANTLIB_STATUS="cache hit"
-          {
-            echo "### DevContainer image published"
-            echo ""
-            echo "Build inputs:"
-            echo "| Stage | Tag | Status |"
-            echo "|---|---|---|"
-            echo "| gcc-base   | \`${{ needs.gcc-base.outputs.tag }}\`    | ${{ needs.gcc-base.outputs.cache_hit == 'true' && 'cache hit' || 'rebuilt' }} |"
-            echo "| small-deps | \`${{ needs.small-deps.outputs.tag }}\` | ${{ needs.small-deps.outputs.cache_hit == 'true' && 'cache hit' || 'rebuilt' }} |"
-            echo "| arrow      | \`${{ needs.arrow.outputs.tag }}\`      | ${ARROW_STATUS} |"
-            echo "| quantlib   | \`${{ needs.quantlib.outputs.tag }}\`   | ${QUANTLIB_STATUS} |"
-            echo ""
-            echo "Published tags:"
-            echo '```'
-            echo "ghcr.io/${OWNER}/lambda_cpp26-dev:${SHORT_SHA}"
-            echo "ghcr.io/${OWNER}/lambda_cpp26-dev:latest"
-            echo "ghcr.io/${OWNER}/lambda_cpp26-dev:${DATE_TAG}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "### DevContainer image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published to:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "ghcr.io/${OWNER}/lambda_cpp26-dev:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "ghcr.io/${OWNER}/lambda_cpp26-dev:dev-$(date -u +%Y%m%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Teammates: \`git pull\` then Reopen in Container — VSCode will pull the new image automatically." >> "$GITHUB_STEP_SUMMARY"

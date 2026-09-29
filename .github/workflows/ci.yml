@@ -50,7 +50,7 @@ jobs:
       - name: Build + test (fast — base cached)
         run: |
           podman build \
-            --build-arg BASE_TAG=${{ needs.base.outputs.conan_tag }} \
+            --build-arg BASE_TAG=${{ needs.base.outputs.conan_tag }}-conan \
             --build-arg REGISTRY_OWNER=${{ github.repository_owner }} \
             --target test \
             -t lambda-cpp26:test \

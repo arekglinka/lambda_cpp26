@@ -76,11 +76,13 @@ jobs:
       - name: Ensure conan-deps stage
         run: |
           TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_CONAN }}-conan"
+          PLAIN="${{ env.BASE }}:${{ steps.hash.outputs.H_CONAN }}"
           if podman pull "$TAG" 2>/dev/null; then
             echo "conan-deps cached"
           else
-            podman build -f Containerfile.base --target conan-deps -t "$TAG" .
+            podman build -f Containerfile.base --target conan-deps -t "$TAG" -t "$PLAIN" .
             podman push "$TAG"
+            podman push "$PLAIN"
           fi
 
       - name: Ensure agents stage (full base)

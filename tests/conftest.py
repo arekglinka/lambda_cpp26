@@ -12,8 +12,10 @@ def find_extension():
         "/var/task",
     ]:
         candidate = os.path.realpath(candidate)
+        if not os.path.isdir(candidate):
+            continue
         if any(f.startswith("sum_columns") and f.endswith(".so")
-               for f in os.listdir(candidate) if os.path.isdir(candidate)):
+               for f in os.listdir(candidate)):
             return candidate
     return None
 

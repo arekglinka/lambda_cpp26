@@ -1,0 +1,43 @@
+# Task 5 — Dual-access simulation: DEFERRED to task 6 (F3)
+
+Date: 2026-09-27
+Reason: agents-stage image not yet available locally.
+
+Pre-check performed:
+  $ podman images | grep 9865497
+  (no output — image ghcr.io/arekglinka/lambda_cpp26-base:9865497dbf5e848a NOT present)
+
+  $ tail -2 /tmp/agents-stage-build.log
+      - has unions with non-trivial members : yes [4]
+      - has <type_traits> sufficient for Boost.Atomic : yes [4]
+  (background conan-deps/agents build still compiling — boost configure phase)
+
+Per instructions: did NOT wait for the build, did NOT kill it.
+
+## Simulation commands to run once the image lands (task 6 F3):
+
+  podman run -d --name vsc-lambda_cpp26-sim \
+      --entrypoint sleep \
+      ghcr.io/arekglinka/lambda_cpp26-base:9865497dbf5e848a infinity
+  podman exec vsc-lambda_cpp26-sim omo --version
+  podman exec vsc-lambda_cpp26-sim bash -c 'echo alive'
+  podman rm -f vsc-lambda_cpp26-sim
+
+Note: Lambda base ENTRYPOINT is the RIE, so `--entrypoint sleep` is required
+or the container exits instantly. `omo --version` must resolve via the image
+ENV (PATH=/root/.bun/bin). If it hangs interactively, prefix `timeout 30`.
+
+Expected: exec works while no "client" is attached — models the
+VS Code-disconnected state enabled by "shutdownAction": "none".
+
+## What DID land in task 5 (validated):
+
+- Makefile `base` target rewritten: per-stage hashes via
+  scripts/base-stage-hash.sh (H_TC/H_PY/H_CONAN/H_AG), loops the 4 stages,
+  skips existing images, tags agents stage as :latest too.
+  `make -n base` dry-run OK (hashes: toolchain=e086a1a8e997f6b2,
+  python=031006d01ca4eb49, conan=a66997bffd3aa0f5, agents=9865497dbf5e848a).
+- Makefile `dev-exec` target added (exec into vsc-lambda_cpp26-* container),
+  .PHONY updated, `make help` lists it.
+- .devcontainer/devcontainer.json: "shutdownAction": "none" added as
+  top-level key after the "build" block; `python3 -m json.tool` parse OK.

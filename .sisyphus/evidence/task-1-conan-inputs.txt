@@ -1,0 +1,21 @@
+=== Task 1 QA: conan-deps extra inputs (recipes/ changes rehash) ===
+date: 2026-09-27T18:00:10+02:00
+note: qa-mutation is reverted via cp-backup restore (file is tracked+clean, but
+      cp-restore is used uniformly since Containerfile.base work is uncommitted).
+
+baseline conan-deps=a66997bffd3aa0f5
+
+--- mutation: append "# qa-mutation" to recipes/arrow/conandata.yml
+after-mutation conan-deps=19c5f81c86d7dc0d
+PASS: conan-deps hash changed (COPY recipes/ is an extra input)
+  (agents, added in task 2 as a descendant of conan-deps, necessarily rehashes
+   too: its chain input h(conan-deps) changed — verified structurally in the
+   hash-isolation evidence where the 4-stage chain behaves this way.)
+
+--- restore: cp backup back over recipes/arrow/conandata.yml
+after-restore conan-deps=a66997bffd3aa0f5
+PASS: conan-deps matches baseline
+
+PASS: recipes/ clean in git
+
+=== RESULT: conan inputs QA PASSED ===

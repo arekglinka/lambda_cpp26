@@ -1,0 +1,70 @@
+bun: 1.4.2
+warn: To run "omo", add the global bin folder to $PATH:
+
+/root/.bun/bin
+omo: env: ‘node’: No such file or directory
+
+=== APPENDED 2026-09-27 (fix-up session): bun-shim fix + detached build ===
+
+Pre-check transcript above (first session): install path works, but plain `omo`
+failed with `env: node` — omo-ai's global bin is a SYMLINK to
+/root/.bun/install/global/node_modules/omo-ai/bin/omo.js whose shebang is
+`#!/usr/bin/env node` (no node in image; bun-only by design).
+
+Container-level validation (ghcr.io/arekglinka/lambda_cpp26-base:031006d01ca4eb49, --entrypoint bash):
+1. Orchestrator proof line, unmodified install:
+     $ bun /root/.bun/bin/omo --version
+     omo 5.0.1 (engine: senpi 2026.9.27)          -> PROOF-OK
+2. Specified fix line as-given (`sed -i ...`) BREAKS omo: sed -i on the symlink
+   replaces it with a regular file, so omo.js's relative import
+   './lib/bun-bin-shim.js' no longer resolves from /root/.bun/bin ->
+   "Cannot find module './lib/bun-bin-shim.js'" (validated, PLAIN-OMO-FAILED).
+3. One-token correction: `sed --follow-symlinks -i` edits the TARGET, symlink
+   preserved:
+     /root/.bun/bin/omo -> ../install/global/node_modules/omo-ai/bin/omo.js
+     target shebang: #!/usr/bin/env bun
+     $ omo --version   (PATH=/root/.bun/bin:$PATH, as in image ENV)
+     omo 5.0.1 (engine: senpi 2026.9.27)          -> FOLLOW-SYMLINKS-OK
+
+Containerfile.base agents RUN now ends:
+    bun install -g omo-ai && \
+    for f in /root/.bun/bin/*; do [ -f "$f" ] && head -1 "$f" 2>/dev/null | grep -q "env node" && sed --follow-symlinks -i "1s|.*|#!/usr/bin/env bun|" "$f"; done
+
+Stage hashes after fix (scripts/base-stage-hash.sh):
+  toolchain=e086a1a8e997f6b2 python-stack=031006d01ca4eb49
+  conan-deps=a66997bffd3aa0f5 (all UNCHANGED) agents=c4326071f3d452d0 (new)
+
+FULL BUILD RUNNING DETACHED in /tmp/agents-stage-build.log
+  cmd: nohup podman build -f Containerfile.base --target agents \
+         -t ghcr.io/arekglinka/lambda_cpp26-base:c4326071f3d452d0 . \
+         > /tmp/agents-stage-build.log 2>&1 &   (pid 131145)
+  first log lines: toolchain/python/conan-deps parent steps all "Using cache"
+  (layer cache-hit, instant), then cold conan install layer compiling deps
+  (brotli C objects at ~20s in). ETA ~40 min for conan layer.
+
+=== APPENDED 2026-09-27 (round 3): for-loop rc=1 fix + build relaunch ===
+
+BUG (proven empirically in prior round, not re-tested here): the shebang-rewrite
+for-loop used an && chain whose last predicate (grep -q "env node") is FALSE for
+any file whose shebang isn't node. The loop's exit status is the LAST body
+evaluation — with the bin whose shebang doesn't match as the last glob entry,
+the RUN got rc=1 and the build died after `bun install -g omo-ai`. The
+continue-pattern keeps non-matches at rc=0 while real sed failures still fail.
+
+BEFORE:
+    for f in /root/.bun/bin/*; do [ -f "$f" ] && head -1 "$f" 2>/dev/null | grep -q "env node" && sed --follow-symlinks -i "1s|.*|#!/usr/bin/env bun|" "$f"; done
+AFTER:
+    for f in /root/.bun/bin/*; do [ -f "$f" ] || continue; head -1 "$f" 2>/dev/null | grep -q "env node" || continue; sed --follow-symlinks -i "1s|.*|#!/usr/bin/env bun|" "$f"; done
+
+Hashes after edit (scripts/base-stage-hash.sh): parents UNCHANGED
+  toolchain=e086a1a8e997f6b2 python-stack=031006d01ca4eb49 conan-deps=a66997bffd3aa0f5
+  agents=9865497dbf5e848a (NEW)
+
+FULL BUILD RELAUNCHED DETACHED in /tmp/agents-stage-build.log
+  cmd: nohup podman build -f Containerfile.base --target agents \
+         -t ghcr.io/arekglinka/lambda_cpp26-base:9865497dbf5e848a . \
+         > /tmp/agents-stage-build.log 2>&1 &   (pid 151479; prior build was
+  killed by orchestrator pkill, not a build error — log restarted)
+  first log lines: toolchain steps "Using cache" (f3058a13d5392c97 / 9377449e622b8231),
+  python steps cache-hit, then cold conan install layer compiling (brotli
+  CMake build at ~52% within 20s). Do not wait — ETA ~40 min for conan layer.

@@ -1,0 +1,44 @@
+== task-4 wiring check (2026-09-27T16:59:29Z) ==
+
+--- bash -n scripts/build-devcontainer.sh ---
+PASS (exit 0)
+
+--- python3 yaml.safe_load ci.yml ---
+PASS
+
+--- ci.yml build-test-publish BASE_TAG line ---
+31:    needs: base
+53:            --build-arg BASE_TAG=${{ needs.base.outputs.conan_tag }} \
+
+--- build-devcontainer.sh changed lines ---
+39:H_TC="$(scripts/base-stage-hash.sh toolchain)"
+40:H_PY="$(scripts/base-stage-hash.sh python-stack)"
+41:H_CONAN="$(scripts/base-stage-hash.sh conan-deps)"
+42:H_AG="$(scripts/base-stage-hash.sh agents)"
+57:resolve_stage() {
+81:resolve_stage toolchain    "-toolchain" "$H_TC"
+82:resolve_stage python-stack "-python"    "$H_PY"
+83:resolve_stage conan-deps   "-conan"     "$H_CONAN"
+84:resolve_stage agents       ""           "$H_AG" "${BASE_IMAGE}:latest"
+92:    --build-arg BASE_TAG="$H_AG" \
+
+--- helper tag listing (4 stages) ---
+ghcr.io/arekglinka/lambda_cpp26-base:e086a1a8e997f6b2-toolchain
+ghcr.io/arekglinka/lambda_cpp26-base:031006d01ca4eb49-python
+ghcr.io/arekglinka/lambda_cpp26-base:a66997bffd3aa0f5-conan
+ghcr.io/arekglinka/lambda_cpp26-base:9865497dbf5e848a
+
+--- scope: git diff --stat (working tree) ---
+ .devcontainer/Dockerfile           | 48 ++------------------
+ .devcontainer/devcontainer.json    |  6 ++-
+ .github/workflows/ci.yml           | 56 +++++-------------------
+ .github/workflows/devcontainer.yml | 11 +++++
+ Containerfile                      |  8 ++--
+ Containerfile.base                 | 56 ++++++++++++++++++++----
+ Makefile                           | 25 ++++++++++-
+ scripts/build-devcontainer.sh      | 90 ++++++++++++++++++++++++++++----------
+ 8 files changed, 173 insertions(+), 127 deletions(-)
+?? .github/workflows/base-image.yml
+?? .sisyphus/
+?? scripts/base-stage-hash.sh
+?? tests/test_environment.py

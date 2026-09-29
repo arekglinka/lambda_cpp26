@@ -1,0 +1,38 @@
+=== task-3: base-image.yml workflow check (2026-09-27T16:56:16Z) ===
+
+--- YAML parse ---
+YAML parse: OK
+
+--- Helper hashes (run 1) ---
+toolchain:  e086a1a8e997f6b2
+python-stack: 031006d01ca4eb49
+conan-deps: a66997bffd3aa0f5
+agents:     9865497dbf5e848a
+
+--- Helper hashes (run 2, stability check) ---
+toolchain:  e086a1a8e997f6b2
+python-stack: 031006d01ca4eb49
+conan-deps: a66997bffd3aa0f5
+agents:     9865497dbf5e848a
+
+Stability: IDENTICAL across runs: OK
+
+--- Tag cross-check (workflow tags vs computed) ---
+workflow TAG (toolchain): $BASE:e086a1a8e997f6b2-toolchain
+workflow TAG (python):    $BASE:031006d01ca4eb49-python
+workflow TAG (conan):     $BASE:a66997bffd3aa0f5-conan
+workflow TAG (agents):    $BASE:9865497dbf5e848a (+ :latest)
+
+wf 26:      base_tag: ${{ steps.hash.outputs.base_tag }}
+wf 27:      conan_tag: ${{ steps.hash.outputs.conan_tag }}
+wf 58:          TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_TC }}-toolchain"
+wf 68:          TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_PY }}-python"
+wf 78:          TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_CONAN }}-conan"
+wf 88:          TAG="${{ env.BASE }}:${{ steps.hash.outputs.base_tag }}"
+
+Cross-check: toolchain suffix -toolchain / python suffix -python / conan suffix -conan / agents plain = plan design: OK
+
+--- Output wiring (self-ref bug check) ---
+Job outputs wired to steps.hash.outputs.{base_tag,conan_tag}: OK
+wf_call 8:        value: ${{ jobs.base.outputs.base_tag }}
+wf_call 11:        value: ${{ jobs.base.outputs.conan_tag }}

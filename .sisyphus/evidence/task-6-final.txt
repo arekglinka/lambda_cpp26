@@ -1,0 +1,46 @@
+# Task 6 hardening: CI-only heavy base builds (post-plan guardrails)
+# Date: 2026-09-29T09:16:02Z
+# Files touched: scripts/build-devcontainer.sh (resolve_stage gate: ALLOW_LOCAL_STAGE_BUILD=1), Makefile (base target gate: ALLOW_LOCAL_BASE_BUILD=1). Nothing else modified.
+
+== bash -n scripts/build-devcontainer.sh ==
+OK: no syntax errors
+
+== make -n base (dry run, hashes computed offline) ==
+set -e; \
+stages="toolchain:e086a1a8e997f6b2-toolchain python-stack:031006d01ca4eb49-python conan-deps:a66997bffd3aa0f5-conan agents:9865497dbf5e848a"; \
+missing=""; \
+for pair in $stages; do \
+	stage=${pair%%:*}; tag=${pair#*:}; \
+...(recipe prints; first loop now collects missing stages, gate, second loop builds)
+
+== make -n with ALLOW_LOCAL_BASE_BUILD=1 ==
+set -e; \
+stages="toolchain:e086a1a8e997f6b2-toolchain python-stack:031006d01ca4eb49-python conan-deps:a66997bffd3aa0f5-conan agents:9865497dbf5e848a"; \
+missing=""; \
+...(identical recipe expansion — dry-run cannot observe env var; runtime proof below)
+
+== Runtime proof with STUB podman (no real podman invoked) ==
+Stub: pull->exit 1, image exists->exit 1, anything else->'STUB-PODMAN-BUILD-CALLED', exit 99
+
+--- E1: make base, stages missing, ALLOW_LOCAL_BASE_BUILD unset ---
+ERROR: missing base stage(s): toolchain:e086a1a8e997f6b2-toolchain python-stack:031006d01ca4eb49-python conan-deps:a66997bffd3aa0f5-conan agents:9865497dbf5e848a
+Heavy base builds run in CI only (GCC/Arrow/QuantLib compiles stress this machine).
+  -> Trigger CI: push to main, or: gh workflow run base-image.yml
+  -> Local override (at your own risk): ALLOW_LOCAL_BASE_BUILD=1 make base
+make: *** [Makefile:38: base] Error 1
+exit=2
+
+--- E2: make base, ALLOW_LOCAL_BASE_BUILD=1 (gate opens; stub build reached) ---
+==> Building base stage toolchain (e086a1a8e997f6b2-toolchain) (ALLOW_LOCAL_BASE_BUILD=1)...
+STUB-PODMAN-BUILD-CALLED: build -f Containerfile.base --target toolchain -t ghcr.io/arekglinka/lambda_cpp26-base:e086a1a8e997f6b2-toolchain .
+exit=0 (non-zero = stub refused to build, proving build path reached)
+
+--- E3: scripts/build-devcontainer.sh, stage missing, ALLOW_LOCAL_STAGE_BUILD unset ---
+[1;31m[err][0m  Stage ghcr.io/arekglinka/lambda_cpp26-base:e086a1a8e997f6b2-toolchain not found locally or in ghcr.io.
+Heavy base builds run in CI only (GCC/Arrow/QuantLib compiles stress this machine).
+  -> Trigger CI: push to main, or: gh workflow run base-image.yml
+  -> Local override (at your own risk): ALLOW_LOCAL_STAGE_BUILD=1 scripts/build-devcontainer.sh
+exit=1
+
+F1/F2/F4 already passed earlier in task 6; F3 deferred to CI — orchestrator fills details later.
+Note: in E2 the exit code shown is grep's (pipeline), not make's; the 'STUB-PODMAN-BUILD-CALLED' line itself proves the build path was reached only with the override set.

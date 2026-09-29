@@ -1,0 +1,95 @@
+name: Base Image
+
+on:
+  workflow_call:
+    outputs:
+      base_tag:
+        description: "Content-hash tag of the full base image (agents stage, incl. bun/omo)"
+        value: ${{ jobs.base.outputs.base_tag }}
+      conan_tag:
+        description: "Content-hash tag of the conan-deps stage (lean, no bun/omo)"
+        value: ${{ jobs.base.outputs.conan_tag }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  BASE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26-base
+
+jobs:
+  base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      base_tag: ${{ steps.hash.outputs.base_tag }}
+      conan_tag: ${{ steps.hash.outputs.conan_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute stage hashes
+        id: hash
+        run: |
+          H_TC=$(scripts/base-stage-hash.sh toolchain)
+          H_PY=$(scripts/base-stage-hash.sh python-stack)
+          H_CONAN=$(scripts/base-stage-hash.sh conan-deps)
+          H_AG=$(scripts/base-stage-hash.sh agents)
+          echo "H_TC=$H_TC" >> "$GITHUB_OUTPUT"
+          echo "H_PY=$H_PY" >> "$GITHUB_OUTPUT"
+          echo "H_CONAN=$H_CONAN" >> "$GITHUB_OUTPUT"
+          echo "toolchain:  $H_TC"
+          echo "python:     $H_PY"
+          echo "conan-deps: $H_CONAN"
+          echo "agents:     $H_AG"
+          echo "base_tag=$H_AG"    >> "$GITHUB_OUTPUT"
+          echo "conan_tag=$H_CONAN" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Per-stage hash gating via scripts/base-stage-hash.sh: each stage is
+      # tagged and pulled independently, so unchanged stages are skipped.
+      # Steps run in order because pulling stage N-1 primes the buildah blob
+      # cache, so building stage N never redoes its parents — a python-stack
+      # or agents rebuild never recompiles GCC.
+      - name: Ensure toolchain stage
+        run: |
+          TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_TC }}-toolchain"
+          if podman pull "$TAG" 2>/dev/null; then
+            echo "toolchain cached"
+          else
+            podman build -f Containerfile.base --target toolchain -t "$TAG" .
+            podman push "$TAG"
+          fi
+
+      - name: Ensure python-stack stage
+        run: |
+          TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_PY }}-python"
+          if podman pull "$TAG" 2>/dev/null; then
+            echo "python-stack cached"
+          else
+            podman build -f Containerfile.base --target python-stack -t "$TAG" .
+            podman push "$TAG"
+          fi
+
+      - name: Ensure conan-deps stage
+        run: |
+          TAG="${{ env.BASE }}:${{ steps.hash.outputs.H_CONAN }}-conan"
+          if podman pull "$TAG" 2>/dev/null; then
+            echo "conan-deps cached"
+          else
+            podman build -f Containerfile.base --target conan-deps -t "$TAG" .
+            podman push "$TAG"
+          fi
+
+      - name: Ensure agents stage (full base)
+        run: |
+          TAG="${{ env.BASE }}:${{ steps.hash.outputs.base_tag }}"
+          if podman pull "$TAG" 2>/dev/null; then
+            echo "agents cached"
+          else
+            podman build -f Containerfile.base --target agents -t "$TAG" -t "${{ env.BASE }}:latest" .
+            podman push "$TAG"
+            podman push "${{ env.BASE }}:latest"
+          fi

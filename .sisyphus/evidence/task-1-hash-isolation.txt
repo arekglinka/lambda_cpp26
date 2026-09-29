@@ -1,0 +1,61 @@
+=== Task 1 QA: per-stage hash isolation (scripts/base-stage-hash.sh) ===
+date: 2026-09-27T17:59:52+02:00
+note: Containerfile.base is uncommitted work; QA mutations are reverted via
+      cp-backup restore (NOT git checkout, which would restore an older HEAD).
+
+--- preflight: syntax check + unknown-stage handling
+PASS: bash -n clean
+stderr (rc=1): base-stage-hash.sh: unknown stage 'nope'.
+Available stages: toolchain python-stack conan-deps
+PASS: unknown stage exits 1
+PASS: error lists available stages
+
+baseline (3-stage file):
+  toolchain=e086a1a8e997f6b2
+  python-stack=031006d01ca4eb49
+  conan-deps=a66997bffd3aa0f5
+
+--- mutation A: append "# qa-mutation" to EOF (lands in last block = conan-deps today)
+  after-A toolchain=e086a1a8e997f6b2
+PASS: toolchain unchanged
+  after-A python-stack=031006d01ca4eb49
+PASS: python-stack unchanged
+  after-A conan-deps=8f982333aec1bd99
+PASS: conan-deps hash changed
+
+--- restore A: cp backup back over Containerfile.base
+  after-restore-A toolchain=e086a1a8e997f6b2
+PASS: toolchain matches baseline
+  after-restore-A python-stack=031006d01ca4eb49
+PASS: python-stack matches baseline
+  after-restore-A conan-deps=a66997bffd3aa0f5
+PASS: conan-deps matches baseline
+
+--- simulate post-task-2 4-stage file: temporarily append the planned agents stage
+baseline4 (simulated 4-stage file):
+  toolchain=e086a1a8e997f6b2
+  python-stack=031006d01ca4eb49
+  conan-deps=5bce8d9dba636593
+  agents=0602f80dc884180a
+
+--- mutation B: append "# qa-mutation" to EOF (lands in agents block)
+  after-B toolchain=e086a1a8e997f6b2
+PASS: toolchain unchanged
+  after-B python-stack=031006d01ca4eb49
+PASS: python-stack unchanged
+  after-B conan-deps=5bce8d9dba636593
+PASS: conan-deps unchanged
+  after-B agents=d3b9b1b4ac8dea82
+PASS: agents hash changed
+
+--- restore B: cp backup back over Containerfile.base
+  after-restore-B toolchain=e086a1a8e997f6b2
+PASS: toolchain matches baseline
+  after-restore-B python-stack=031006d01ca4eb49
+PASS: python-stack matches baseline
+  after-restore-B conan-deps=a66997bffd3aa0f5
+PASS: conan-deps matches baseline
+
+PASS: Containerfile.base byte-identical to pre-QA backup
+
+=== RESULT: hash isolation QA PASSED ===

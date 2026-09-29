@@ -4,6 +4,16 @@ on:
   push:
     branches: [release]
     tags: ['v*']
+    paths:
+      - src/**
+      - handler.py
+      - conanfile.py
+      - profiles/**
+      - recipes/**
+      - Containerfile
+      - Containerfile.base
+      - .github/workflows/ci.yml
+      - .github/workflows/base-image.yml
   workflow_dispatch:
 
 permissions:
@@ -12,52 +22,10 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26
-  BASE: ghcr.io/${{ github.repository_owner }}/lambda_cpp26-base
 
 jobs:
   base:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    outputs:
-      base_tag: ${{ steps.hash.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Hash base inputs
-        id: hash
-        run: |
-          HASH=$(cat Containerfile.base conanfile.py profiles/al2023 \
-                recipes/arrow/conanfile.py recipes/arrow/conandata.yml \
-                recipes/quantlib/conanfile.py recipes/quantlib/conandata.yml \
-              | sha256sum | cut -c1-16)
-          echo "tag=$HASH" >> "$GITHUB_OUTPUT"
-          echo "Base tag: $HASH"
-
-      - name: Login to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Check if base image exists
-        id: check
-        run: |
-          if podman pull ${{ env.BASE }}:${{ steps.hash.outputs.tag }} 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Base image cached — skipping rebuild"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Base image not found — will rebuild"
-          fi
-
-      - name: Build + push base image
-        if: steps.check.outputs.exists != 'true'
-        run: |
-          podman build \
-            -f Containerfile.base \
-            -t ${{ env.BASE }}:${{ steps.hash.outputs.tag }} \
-            -t ${{ env.BASE }}:latest \
-            .
-          podman push ${{ env.BASE }}:${{ steps.hash.outputs.tag }}
-          podman push ${{ env.BASE }}:latest
-          echo "::notice::Built new base image (${{ steps.hash.outputs.tag }})"
+    uses: ./.github/workflows/base-image.yml
 
   build-test-publish:
     needs: base
@@ -82,7 +50,7 @@ jobs:
       - name: Build + test (fast — base cached)
         run: |
           podman build \
-            --build-arg BASE_TAG=${{ needs.base.outputs.base_tag }} \
+            --build-arg BASE_TAG=${{ needs.base.outputs.conan_tag }} \
             --build-arg REGISTRY_OWNER=${{ github.repository_owner }} \
             --target test \
             -t lambda-cpp26:test \

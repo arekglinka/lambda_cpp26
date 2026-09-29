@@ -14,13 +14,56 @@ PODMAN_RUN    := $(PODMAN) run --rm
 # for Arrow core+parquet+compute+QuantLib, no AWS SDK).
 SIZE_BUDGET   ?= 83886080
 
-.PHONY: all build test ci sample clean shell help
+.PHONY: all base dev-exec build test ci sample clean shell help
 
 all: build
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'begin {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+
+# ---- Shared toolchain base (same stages as CI base-image.yml) ----
+# Per-stage content hashes come from scripts/base-stage-hash.sh (single
+# source of truth, shared with CI and build-devcontainer.sh): editing one
+# stage only invalidates that stage and its descendants.
+
+BASE_IMAGE ?= ghcr.io/arekglinka/lambda_cpp26-base
+
+H_TC    := $(shell scripts/base-stage-hash.sh toolchain)
+H_PY    := $(shell scripts/base-stage-hash.sh python-stack)
+H_CONAN := $(shell scripts/base-stage-hash.sh conan-deps)
+H_AG    := $(shell scripts/base-stage-hash.sh agents)
+
+base: ## Build cached base stages locally (tagged by content hash; CI-only by default)
+	@set -e; \
+	stages="toolchain:$(H_TC)-toolchain python-stack:$(H_PY)-python conan-deps:$(H_CONAN)-conan agents:$(H_AG)"; \
+	missing=""; \
+	for pair in $$stages; do \
+		stage=$${pair%%:*}; tag=$${pair#*:}; \
+		if $(PODMAN) image exists $(BASE_IMAGE):$$tag; then \
+			echo "==> Base stage $$stage ($$tag) already local"; \
+		else \
+			missing="$$missing $$pair"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ] && [ "$${ALLOW_LOCAL_BASE_BUILD:-0}" != "1" ]; then \
+		echo "ERROR: missing base stage(s):$$missing" >&2; \
+		echo "Heavy base builds run in CI only (GCC/Arrow/QuantLib compiles stress this machine)." >&2; \
+		echo "  -> Trigger CI: push to main, or: gh workflow run base-image.yml" >&2; \
+		echo "  -> Local override (at your own risk): ALLOW_LOCAL_BASE_BUILD=1 make base" >&2; \
+		exit 1; \
+	fi; \
+	for pair in $$missing; do \
+		stage=$${pair%%:*}; tag=$${pair#*:}; \
+		echo "==> Building base stage $$stage ($$tag) (ALLOW_LOCAL_BASE_BUILD=1)..."; \
+		$(PODMAN) build -f Containerfile.base --target $$stage -t $(BASE_IMAGE):$$tag .; \
+	done; \
+	$(PODMAN) tag $(BASE_IMAGE):$(H_AG) $(BASE_IMAGE):latest
+
+# ---- Exec into the running devcontainer ----
+
+dev-exec: ## Shell into the running devcontainer (VS Code names it vsc-lambda_cpp26-*; first-run omo auth happens here)
+	@$(PODMAN) exec -it $$(podman ps --filter name=vsc-lambda_cpp26 --format '{{.Names}}' | head -1) bash
 
 # ---- Build the pybind11 extension .so (builder stage) ----
 
@@ -36,7 +79,7 @@ build: ## Build the pybind11 .so extension (builder stage)
 		echo "==> WARNING: .so not found — check the builder stage"
 	@ls -lh sum_columns.so 2>/dev/null || true
 
-# ---- Cleanroom test (pure lambda/python:3.12 + .so + local parquet) ----
+# ---- Cleanroom test (pure lambda/python:3.13 + .so + local parquet) ----
 
 test: ## Build + run the Lambda Python cleanroom test (test stage)
 	@echo "==> Building test image..."

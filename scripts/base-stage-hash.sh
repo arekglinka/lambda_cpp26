@@ -39,7 +39,7 @@ for i in "${!stages[@]}"; do
             {
                 printf '%s' "$prev"
                 cat "$block"
-                find conanfile.py profiles recipes -type f 2>/dev/null | sort | xargs -r cat
+                git ls-files conanfile.py profiles recipes | LC_ALL=C sort | xargs -r cat
             } | sha256sum | cut -c1-16
         )"
     else

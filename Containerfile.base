@@ -72,6 +72,7 @@ RUN conan install . --build=missing \
         -pr:b /tmp/conan-profiles/al2023 \
         -s:h build_type=${BUILD_TYPE}
 FROM conan-deps AS agents
+# e2e-cache-granularity-probe 2026-09-29T10:40Z
 
 # https://omo.dev — bun runtime + omo agent CLI
 RUN dnf install -y unzip && dnf clean all && \

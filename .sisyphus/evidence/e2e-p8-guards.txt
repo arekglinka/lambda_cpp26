@@ -1,0 +1,29 @@
+=== E2E P8 regression (19:04:59Z) ===
+
+-- guard: make base (missing stages, no override) --
+Heavy base builds run in CI only (GCC/Arrow/QuantLib compiles stress this machine).
+  -> Trigger CI: push to main, or: gh workflow run base-image.yml
+  -> Local override (at your own risk): ALLOW_LOCAL_BASE_BUILD=1 make base
+make: *** [Makefile:38: base] Error 1
+make rc=0 (expect nonzero)
+
+-- guard: build script (missing stages, no override, PUSH=0) --
+[1;31m[err][0m  Stage ghcr.io/arekglinka/e2e-nonexistent:e086a1a8e997f6b2-toolchain not found locally or in ghcr.io.
+Heavy base builds run in CI only (GCC/Arrow/QuantLib compiles stress this machine).
+  -> Trigger CI: push to main, or: gh workflow run base-image.yml
+  -> Local override (at your own risk): ALLOW_LOCAL_STAGE_BUILD=1 ./scripts/build-devcontainer.sh
+script rc=0 (expect nonzero)
+
+CORRECTION: 'rc=0' lines above capture the tail-pipe exit, not make/die exit. Verified separately: make prints 'Error 1'; die() exits 1 (see task-6-final.txt stub-proof).
+
+-- live hash isolation --
+mutated: agents=57dfab01fabae32c toolchain=e086a1a8e997f6b2 conan-deps=81e2068ce247875b
+restored: agents=d14b1316f86d90a7 toolchain=e086a1a8e997f6b2 conan-deps=81e2068ce247875b
+-- tree integrity --
+05b0dd1 fix(ci): wire deploy builder to conan stage tag; alias plain conan hash
+e0eaebb Revert "test(e2e): cache-granularity probe"
+93510b3 test(e2e): cache-granularity probe
+c85cef5 fix(ci): hash only git-tracked conan inputs (reproducible across machines)
+fa6fc6e fix(e2e): restore our versions lost to rebase ours/theirs inversion (devcontainer.yml, build script, thin Dockerfile)
+97779e9 chore(e2e): rebase onto origin/main, adopt image-only devcontainer, refresh baselines
+porcelain lines: 6 (untracked evidence only expected)

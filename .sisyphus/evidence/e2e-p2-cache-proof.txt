@@ -1,0 +1,22 @@
+=== E2E P2 cache-granularity (13:15:02Z) ===
+run: https://github.com/arekglinka/lambda_cpp26/actions/runs/36564903355 conclusion=success
+mutation: agents hash d14b1316f86d90a7 -> faa3be87bb352c85 (parents unchanged: e086/0310/81e2)
+
+-- parent ensure-steps (cached pulls) --
+  [ok]^[[0m   Stage pulled from registry: ghcr.io/arekglinka/lambda_cpp26-base:e086a1a8e997f6b2-toolchain
+  [ok]^[[0m   Stage pulled from registry: ghcr.io/arekglinka/lambda_cpp26-base:031006d01ca4eb49-python
+  [ok]^[[0m   Stage pulled from registry: ghcr.io/arekglinka/lambda_cpp26-base:81e2068ce247875b-conan
+  [ok]^[[0m   Stage pulled from registry: ghcr.io/arekglinka/lambda_cpp26-base:faa3be87bb352c85
+
+-- agents stage build --
+[4/4] STEP 2/3: RUN dnf install -y unzip && dnf clean all &&     curl -fsSL https://github.com/oven-sh/bun/releases/late
+installed omo-ai@5.1.1 with binaries:
+
+-- dev image publish --
+  [ok]^[[0m   Built: ghcr.io/arekglinka/lambda_cpp26-dev:93510b3
+  [ok]^[[0m   Tagged: ghcr.io/arekglinka/lambda_cpp26-dev:latest, ghcr.io/arekglinka/lambda_cpp26-dev:dev-20260929
+  [ok]^[[0m   Pushed 3 tags to ghcr.io
+
+-- restore --
+revert commit: e0eaebb; hashes back to: d14b1316f86d90a7 (d14b1316f86d90a7 expected)
+4

@@ -1,0 +1,14 @@
+=== E2E P0 commit/push (10:30:43Z) ===
+commits: cb66bcf (rebased 835d057) + 97779e9 (baselines) + fa6fc6e (rebase-inversion recovery)
+push: 27e3155..fa6fc6e main
+
+== INCIDENT LOG ==
+1. push rejected (remote drift) -> rebase
+2. rebase collided with user's June-21 parallel line (python3.12, 5-job CI)
+3. DECISION (oracle-assisted): our line wins 4 conflicts; adopted remote's image-only devcontainer.json
+4. REBASE OURS/THEIRS INVERSION: 'git checkout --ours' during rebase takes UPSTREAM (remote) side - 3 files silently reverted to June-21 versions in the commit
+5. workflow DevContainer Image was disabled_inactivity (GitHub auto-disable after repo dormancy) -> push fired nothing
+6. FIX: recovered 3 files from cb66bcf, gh workflow enable, repush -> run 36555877690 IN_PROGRESS
+
+run: https://github.com/arekglinka/lambda_cpp26/actions/runs/36555877690
+NOTE: new agents-stage hash 28a714d4fe5f694f (conan recipes from remote flowed in); baselines file updated

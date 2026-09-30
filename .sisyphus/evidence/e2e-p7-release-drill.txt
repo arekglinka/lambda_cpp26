@@ -1,0 +1,16 @@
+=== E2E P7 release drill (19:04:59Z) ===
+trigger probe: tag v0.0.0-e2e.0 DID fire ci.yml (run 36573903484) - paths filter does NOT block tag pushes; no ci.yml fix needed
+probe run FAILURE: deploy builder FROM base:81e2... plain tag missing (only -conan suffixed existed) - wiring bug found
+FIX: base-image.yml conan stage now aliases plain hash; ci.yml passes conan_tag-conan
+dispatch validation: run 36575515990 SUCCESS in 6m05s (vs 1h21m cold - caching payoff)
+branch: release pushed (branch-push did not fire a run - minor finding, tags drive releases)
+drill: tag v0.0.0-e2e.1 -> run 36576923731 SUCCESS 7m23s
+verified: gh release view v0.0.0-e2e.1 -> tag=v0.0.0-e2e.1, asset sum_columns.so size=43856272 bytes (41.8MB <= 80MB budget)
+verified: podman push lambda_cpp26:0.0.0-e2e.1 + :latest executed in run log
+
+== cleanup ==
+gh release delete v0.0.0-e2e.1 --cleanup-tag: OK (release not found after)
+tag v0.0.0-e2e.0 deleted from origin+local: OK
+git ls-remote v0.0.0-e2e*: 0 remaining
+release branch: KEPT (system design)
+ghcr leftovers needing delete:packages (PAT): lambda_cpp26:0.0.0-e2e.1 image version + 0.0.0-dev-<sha> from dispatch run

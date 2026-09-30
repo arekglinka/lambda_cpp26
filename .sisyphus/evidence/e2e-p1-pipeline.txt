@@ -1,0 +1,11 @@
+=== E2E P1 pipeline (11:50:58Z) ===
+run: https://github.com/arekglinka/lambda_cpp26/actions/runs/36555877690 conclusion=success
+
+-- checkpoint A: base stage ensure-steps --
+build-and-push	Build + bake Conan deps + commit + push	2026-09-29T11:50:16.1529747Z ^[[1;32m[ok]^[[0m   Pushed 3 tags to ghcr.io
+
+-- checkpoint B: dev image publish --
+build-and-push	Build + bake Conan deps + commit + push	2026-09-29T11:50:05.5115204Z ^[[1;34m[build]^[[0m Committing prep container as image...
+build-and-push	Build + bake Conan deps + commit + push	2026-09-29T11:50:05.7963460Z ^[[1;32m[ok]^[[0m   Built: ghcr.io/arekglinka/lambda_cpp26-dev:fa6fc6e
+build-and-push	Build + bake Conan deps + commit + push	2026-09-29T11:50:05.7965275Z ^[[1;32m[ok]^[[0m   Tagged: ghcr.io/arekglinka/lambda_cpp26-dev:latest, ghcr.io/arekglinka/lambda_cpp26-dev:dev-20260929
+build-and-push	Build + bake Conan deps + commit + push	2026-09-29T11:50:16.1529747Z ^[[1;32m[ok]^[[0m   Pushed 3 tags to ghcr.io

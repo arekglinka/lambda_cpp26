@@ -1,0 +1,7 @@
+
+=== E2E P4 (CI-side) — 2026-09-30T18:23:55Z ===
+run 36748733161 (agents rebuild +gdb/valgrind): ALL JOBS SUCCESS
+verify job: env suite INSIDE ghcr.io/arekglinka/lambda_cpp26-dev:latest
+======================== 13 passed, 1 skipped in 8.77s =========================
+bugs fixed en route: conftest fresh-checkout collection crash (os.listdir guard); gdb/valgrind restored in agents stage
+NOTE: local dev-image pulls forbidden on this machine (OOM) — P4 executed as CI verify job instead (permanent addition)

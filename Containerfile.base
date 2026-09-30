@@ -74,7 +74,7 @@ RUN conan install . --build=missing \
 FROM conan-deps AS agents
 
 # https://omo.dev — bun runtime + omo agent CLI
-RUN dnf install -y unzip && dnf clean all && \
+RUN dnf install -y unzip gdb valgrind && dnf clean all && \
     curl -fsSL https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip -o /tmp/bun.zip && \
     unzip -q /tmp/bun.zip -d /tmp && \
     mv /tmp/bun-linux-x64/bun /usr/local/bin/bun && \

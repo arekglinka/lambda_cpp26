@@ -76,7 +76,7 @@ def test_system_tools(tool):
 
 
 def test_python_version():
-    assert sys.version_info[:2] >= (3, 13), sys.version
+    assert sys.version_info[:2] >= (3, 14), sys.version
 
 
 def test_pybind11():

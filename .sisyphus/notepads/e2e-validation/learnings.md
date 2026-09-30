@@ -1,0 +1,11 @@
+# e2e-validation session learnings
+## 2026-09-29 P0 lessons
+- REBASE OURS/THEIRS INVERSION: during `git rebase`, `--ours` = upstream (rebase target), `--theirs` = YOUR commit being replayed. Opposite of merge semantics. A `git checkout --ours` during rebase conflict resolution silently took the remote's old versions of 3 files into the commit. ALWAYS diff HEAD vs expectation after resolving.
+- GitHub auto-disables workflows after ~60 days repo inactivity (state: disabled_inactivity) — disabled workflows ignore push events silently. Fix: `gh workflow enable "<name>"`, verify via `gh workflow list`.
+- ghcr packages (lambda_cpp26-dev/base) pre-exist and CI previously pushed via GITHUB_TOKEN (repo auto-linked) — CI pushes work without a PAT. The PAT (write/delete:packages) is only needed for LOCAL pulls + ghcr version cleanup.
+- P4 restructured: dev-image validation runs CI-side (verify job); local pulls of the 15GB dev image OOM the WSL box — forbidden.
+
+conftest find_extension genexp guard bug: 'for f in os.listdir(x) if os.path.isdir(x)' evaluates listdir FIRST — isdir is an item filter, not a guard. Guard before listdir.
+gdb/valgrind lost in devcontainer->Containerfile.base unification; placed in agents stage dnf so only that stage's hash changes (parents stay cached)
+
+- Python version now lives in exactly 2 ARG tokens + test floor; check-wheels.sh pre-flight prevents wasted CI on missing cp wheels.

@@ -14,7 +14,7 @@ PODMAN_RUN    := $(PODMAN) run --rm
 # for Arrow core+parquet+compute+QuantLib, no AWS SDK).
 SIZE_BUDGET   ?= 83886080
 
-.PHONY: all base dev-exec build test ci sample clean shell help
+.PHONY: all base dev-exec build test ci sample clean shell check-wheels help
 
 all: build
 
@@ -79,7 +79,7 @@ build: ## Build the pybind11 .so extension (builder stage)
 		echo "==> WARNING: .so not found — check the builder stage"
 	@ls -lh sum_columns.so 2>/dev/null || true
 
-# ---- Cleanroom test (pure lambda/python:3.13 + .so + local parquet) ----
+# ---- Cleanroom test (pure Lambda python base + .so + local parquet) ----
 
 test: ## Build + run the Lambda Python cleanroom test (test stage)
 	@echo "==> Building test image..."
@@ -128,6 +128,9 @@ sample: ## Regenerate data/sample.parquet
 
 shell: build ## Drop into the builder container shell
 	$(PODMAN_RUN) -it --entrypoint /bin/bash $(IMAGE_NAME):builder
+
+check-wheels: ## Probe cp-wheel availability for a Python version (default 3.14)
+	@bash scripts/check-wheels.sh ${PY}
 
 inspect: build ## Run ldd + readelf on the .so inside the builder
 	@echo "==> ldd:"; $(PODMAN) run --rm --entrypoint sh $(IMAGE_NAME):builder -c 'ldd /tmp/sum_columns.so' 2>&1 || true

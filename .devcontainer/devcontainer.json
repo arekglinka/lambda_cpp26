@@ -17,7 +17,7 @@
         "vadimcn.vscode-lldb"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/var/lang/bin/python3.13",
+        "python.defaultInterpreterPath": "/var/lang/bin/python3",
         "python.analysis.extraPaths": [
           "${workspaceFolder}/build/Release"
         ],

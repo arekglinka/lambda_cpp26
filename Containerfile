@@ -1,4 +1,5 @@
 ARG BASE_TAG=latest
+ARG PYTHON_VERSION=3.14
 FROM ghcr.io/${REGISTRY_OWNER:-arekglinka}/lambda_cpp26-base:${BASE_TAG} AS builder
 
 ARG BUILD_TYPE=Release
@@ -16,9 +17,9 @@ RUN find build -name "sum_columns*.so" -exec cp {} /tmp/sum_columns.so \; && \
 # ============================================================
 # Stage 2: Test
 # ============================================================
-FROM public.ecr.aws/lambda/python:3.13 AS test
+FROM public.ecr.aws/lambda/python:${PYTHON_VERSION} AS test
 
-RUN pip3.13 install --no-cache-dir "pyarrow>=25"
+RUN pip3 install --no-cache-dir "pyarrow>=25"
 
 COPY --from=builder /tmp/sum_columns.so ${LAMBDA_TASK_ROOT}/
 COPY --from=builder /opt/gcc16/lib64/libstdc++.so.6 /lib64/
@@ -27,8 +28,8 @@ COPY handler.py ${LAMBDA_TASK_ROOT}/
 COPY data/ ${LAMBDA_TASK_ROOT}/data/
 COPY tests/cleanroom_test.py /tmp/cleanroom_test.py
 
-RUN python3.13 -c "import sum_columns; print('import OK')"
-RUN python3.13 /tmp/cleanroom_test.py
+RUN python3 -c "import sum_columns; print('import OK')"
+RUN python3 /tmp/cleanroom_test.py
 RUN ldd ${LAMBDA_TASK_ROOT}/sum_columns.so
 
 CMD ["handler.lambda_handler"]

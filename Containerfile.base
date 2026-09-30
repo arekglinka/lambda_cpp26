@@ -11,7 +11,8 @@
 #
 # NOTE: dnf python3-devel is intentionally absent — the Lambda base ships
 # CPython headers under /var/lang/include, which CMake's FindPython picks up.
-FROM public.ecr.aws/lambda/python:3.13 AS toolchain
+ARG PYTHON_VERSION=3.14
+FROM public.ecr.aws/lambda/python:${PYTHON_VERSION} AS toolchain
 
 ARG GCC_VERSION=16.2.0
 
@@ -45,11 +46,11 @@ ENV CXXFLAGS=""
 FROM toolchain AS python-stack
 
 ARG TORCH_CUDA_INDEX=cu130
-RUN pip3.13 install --no-cache-dir "numpy>=2.5" && \
-    pip3.13 install --no-cache-dir torch \
+RUN pip3 install --no-cache-dir "numpy>=2.5" && \
+    pip3 install --no-cache-dir torch \
         --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_INDEX}"
 
-RUN pip3.13 install --no-cache-dir \
+RUN pip3 install --no-cache-dir \
     "conan>=2.32" "cmake>=4.4" "ninja>=1.13" \
     "pybind11>=3.1" "pyarrow>=25" "pytest>=9" \
     "clangd>=22"

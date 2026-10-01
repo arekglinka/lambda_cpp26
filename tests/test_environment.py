@@ -59,7 +59,7 @@ def test_ninja():
 def test_conan():
     r = run(["conan", "--version"])
     assert r.returncode == 0
-    assert_min(r.stdout, (2, 32), "conan")
+    assert_min(r.stdout, (2, 33), "conan")
 
 
 def test_clangd():
@@ -142,6 +142,32 @@ def test_cupy():
         assert int((a * 2).sum()) == 12
 
 
+def test_jupyter():
+    r = run(["jupyter", "lab", "--version"])
+    assert r.returncode == 0, r.stderr
+    assert_min(r.stdout, (4,), "jupyterlab")
+
+
+def test_streamlit():
+    import streamlit
+
+    assert_min(streamlit.__version__, (1, 64), "streamlit")
+
+
+def test_altair():
+    import altair as alt
+
+    assert_min(alt.__version__, (6, 3), "altair")
+    chart = alt.Chart({"values": [{"x": 1, "y": 2}]}).mark_point().encode(x="x:Q", y="y:Q")
+    assert "mark" in chart.to_dict()
+
+
+def test_seaborn():
+    import seaborn as sns
+
+    assert_min(sns.__version__, (0, 13), "seaborn")
+
+
 def test_pybind11_end_to_end(tmp_path):
     inc = run([sys.executable, "-m", "pybind11", "--includes"])
     assert inc.returncode == 0, inc.stderr
@@ -181,7 +207,7 @@ needs_gpu = pytest.mark.skipif(
 def test_torch_cuda():
     import torch
 
-    assert_min(torch.__version__.split("+")[0], (2, 11), "torch")
+    assert_min(torch.__version__.split("+")[0], (2, 14), "torch")
     assert "sm_75" in torch.cuda.get_arch_list(), torch.cuda.get_arch_list()
     assert "2060" in torch.cuda.get_device_name(0)
 

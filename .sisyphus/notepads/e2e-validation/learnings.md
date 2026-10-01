@@ -11,3 +11,5 @@ gdb/valgrind lost in devcontainer->Containerfile.base unification; placed in age
 - Python version now lives in exactly 2 ARG tokens + test floor; check-wheels.sh pre-flight prevents wasted CI on missing cp wheels.
 - polars 1.44 = universal wheel + auto polars-runtime-32 dep (rt64 extra = optimized runtime, avoided for CPU compat); jax[cuda13] on its own layer separate from the torch index line.
 - cupy installs as dedicated cupy-cuda13x distribution (not an extra); pandas 3.0 cp314 native.
+- app layer (jupyterlab/notebook/streamlit) isolated in its own RUN for independent invalidation; VS Code auto-forwards devcontainer ports so jupyter/streamlit need no runArgs.
+- viz stack (altair 6/seaborn/matplotlib) joins the app layer; floors refreshed to Oct-2026 latests (conan 2.33, jupyterlab 4.6, notebook 7.6); seaborn 0.13.2 is still latest — pandas-3 compat validated empirically by the CI verify test.

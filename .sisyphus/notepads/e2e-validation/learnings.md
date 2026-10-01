@@ -16,3 +16,5 @@ gdb/valgrind lost in devcontainer->Containerfile.base unification; placed in age
 - gpu_showcase.ipynb pattern: interact callbacks invoked once with defaults so headless nbconvert produces real output; GPU guarded with CPU fallback labels.
 - nbconvert --output must be a bare filename (use cwd=); containerized notebook tests need their notebook dir mounted too.
 nbconvert output placement: default output-dir = SOURCE notebook's dir, not cwd — always pass --output-dir explicitly.
+
+- dev-up.sh: one-command local launcher (auth→vscode-fix→gates→pull w/ retry→smoke); dead rootful socket in VS Code machine settings was the local-run blocker. Resource gates (disk≥30G/ram≥8G) abort before any bytes are pulled — the OOM lesson; smoke test MUST override --entrypoint (Lambda RIE base).

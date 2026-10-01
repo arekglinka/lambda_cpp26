@@ -14,7 +14,7 @@ PODMAN_RUN    := $(PODMAN) run --rm
 # for Arrow core+parquet+compute+QuantLib, no AWS SDK).
 SIZE_BUDGET   ?= 83886080
 
-.PHONY: all base dev-exec build test ci sample clean shell check-wheels help
+.PHONY: all base dev-exec dev-up build test ci sample clean shell check-wheels help
 
 all: build
 
@@ -64,6 +64,9 @@ base: ## Build cached base stages locally (tagged by content hash; CI-only by de
 
 dev-exec: ## Shell into the running devcontainer (VS Code names it vsc-lambda_cpp26-*; first-run omo auth happens here)
 	@$(PODMAN) exec -it $$(podman ps --filter name=vsc-lambda_cpp26 --format '{{.Names}}' | head -1) bash
+
+dev-up: ## Pre-flight + pull + smoke-test the devcontainer image locally
+	@bash scripts/dev-up.sh
 
 # ---- Build the pybind11 extension .so (builder stage) ----
 

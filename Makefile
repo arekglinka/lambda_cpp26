@@ -14,7 +14,7 @@ PODMAN_RUN    := $(PODMAN) run --rm
 # for Arrow core+parquet+compute+QuantLib, no AWS SDK).
 SIZE_BUDGET   ?= 83886080
 
-.PHONY: all base dev-exec dev-up build test ci sample clean shell check-wheels help
+.PHONY: all base dev-exec dev-run dev-down dev-up build test ci sample clean shell check-wheels help
 
 all: build
 
@@ -62,8 +62,19 @@ base: ## Build cached base stages locally (tagged by content hash; CI-only by de
 
 # ---- Exec into the running devcontainer ----
 
-dev-exec: ## Shell into the running devcontainer (VS Code names it vsc-lambda_cpp26-*; first-run omo auth happens here)
-	@$(PODMAN) exec -it $$(podman ps --filter name=vsc-lambda_cpp26 --format '{{.Names}}' | head -1) bash
+dev-exec: ## Shell into the running devcontainer (prefers script-created lambda_cpp26-dev; falls back to VS Code's vsc-lambda_cpp26-*)
+	@cid=$$($(PODMAN) ps --filter name=lambda_cpp26-dev --format '{{.Names}}' | head -1); \
+	if [ -z "$$cid" ]; then \
+		cid=$$($(PODMAN) ps --filter name=vsc-lambda_cpp26 --format '{{.Names}}' | head -1); \
+	fi; \
+	[ -n "$$cid" ] || { echo "==> No running devcontainer (start one: make dev-run, or open in VS Code)"; exit 1; }; \
+	$(PODMAN) exec -it $$cid bash
+
+dev-run: ## Start the devcontainer without VS Code (GPU + jupyter/streamlit ports)
+	@bash scripts/dev-run.sh up
+
+dev-down: ## Stop the VS Code-free devcontainer (container kept)
+	@bash scripts/dev-run.sh down
 
 dev-up: ## Pre-flight + pull + smoke-test the devcontainer image locally
 	@bash scripts/dev-up.sh

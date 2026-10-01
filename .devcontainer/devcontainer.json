@@ -34,6 +34,10 @@
       }
     }
   },
+  "containerEnv": {
+    "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+    "LD_LIBRARY_PATH": "/var/lang/lib/python3.14/site-packages/nvidia/cu13/lib:/usr/lib/wsl/lib:/opt/gcc16/lib64"
+  },
   "remoteEnv": {
     "PYTHONPATH": "${containerWorkspaceFolder}/build/Release:${containerWorkspaceFolder}"
   },

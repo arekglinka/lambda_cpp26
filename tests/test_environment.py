@@ -176,13 +176,13 @@ def test_gpu_showcase_notebook_executes(tmp_path):
     if not nb:
         pytest.skip("jupyter not on PATH")
     src = os.path.join(os.path.dirname(__file__), "..", "notebooks", "gpu_showcase.ipynb")
-    out = str(tmp_path / "executed.ipynb")
     r = subprocess.run(
         ["jupyter", "nbconvert", "--to", "notebook", "--execute", src,
-         "--output", out, "--ExecutePreprocessor.timeout=600"],
-        capture_output=True, text=True, timeout=900,
+         "--output", "executed", "--ExecutePreprocessor.timeout=600"],
+        capture_output=True, text=True, timeout=900, cwd=str(tmp_path),
     )
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    assert (tmp_path / "executed.ipynb").exists(), "nbconvert produced no output"
 
 
 def test_pybind11_end_to_end(tmp_path):

@@ -83,6 +83,7 @@ jobs:
         run: |
           podman run --rm --entrypoint python3 \
             -v "${PWD}/tests:/workspaces/lambda_cpp26/tests:Z" \
+            -v "${PWD}/notebooks:/workspaces/lambda_cpp26/notebooks:Z" \
             -w /workspaces/lambda_cpp26 \
             ghcr.io/${OWNER}/lambda_cpp26-dev:latest \
             -m pytest tests/test_environment.py -v

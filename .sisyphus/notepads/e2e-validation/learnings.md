@@ -10,3 +10,4 @@ gdb/valgrind lost in devcontainer->Containerfile.base unification; placed in age
 
 - Python version now lives in exactly 2 ARG tokens + test floor; check-wheels.sh pre-flight prevents wasted CI on missing cp wheels.
 - polars 1.44 = universal wheel + auto polars-runtime-32 dep (rt64 extra = optimized runtime, avoided for CPU compat); jax[cuda13] on its own layer separate from the torch index line.
+- cupy installs as dedicated cupy-cuda13x distribution (not an extra); pandas 3.0 cp314 native.

@@ -116,6 +116,32 @@ def test_jax():
     assert devices, "no jax devices at all (not even CPU)"
 
 
+def test_pandas():
+    import pandas as pd
+
+    assert_min(pd.__version__, (3, 0), "pandas")
+    s = pd.Series({"a": 1, "b": 2, "c": 3})
+    assert int(s.sum()) == 6
+
+
+def test_cupy():
+    try:
+        import cupy as cp
+    except (ImportError, OSError, RuntimeError) as e:
+        if "cuda" in str(e).lower() or "driver" in str(e).lower():
+            pytest.skip(f"no CUDA driver (CI): {e}")
+        raise
+
+    assert_min(cp.__version__, (14,), "cupy")
+    try:
+        n = cp.cuda.runtime.getDeviceCount()
+    except Exception:
+        n = 0
+    if n:
+        a = cp.arange(4)
+        assert int((a * 2).sum()) == 12
+
+
 def test_pybind11_end_to_end(tmp_path):
     inc = run([sys.executable, "-m", "pybind11", "--includes"])
     assert inc.returncode == 0, inc.stderr

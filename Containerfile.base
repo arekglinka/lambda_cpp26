@@ -54,7 +54,7 @@ RUN pip3 install --no-cache-dir "jax[cuda13]>=0.11"
 
 RUN pip3 install --no-cache-dir "cupy-cuda13x>=14"
 
-RUN pip3 install --no-cache-dir "jupyterlab>=4.6" "notebook>=7.6" "streamlit>=1.64" "altair>=6.3" "seaborn>=0.13" "matplotlib>=3.11"
+RUN pip3 install --no-cache-dir "jupyterlab>=4.6" "notebook>=7.6" "streamlit>=1.64" "altair>=6.3" "seaborn>=0.13" "matplotlib>=3.11" "ipywidgets>=8.1"
 
 RUN pip3 install --no-cache-dir \
     "conan>=2.33" "cmake>=4.4" "ninja>=1.13" \

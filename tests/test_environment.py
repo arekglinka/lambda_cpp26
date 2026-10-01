@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -166,6 +167,22 @@ def test_seaborn():
     import seaborn as sns
 
     assert_min(sns.__version__, (0, 13), "seaborn")
+
+
+def test_gpu_showcase_notebook_executes(tmp_path):
+    import shutil, subprocess
+
+    nb = shutil.which("jupyter")
+    if not nb:
+        pytest.skip("jupyter not on PATH")
+    src = os.path.join(os.path.dirname(__file__), "..", "notebooks", "gpu_showcase.ipynb")
+    out = str(tmp_path / "executed.ipynb")
+    r = subprocess.run(
+        ["jupyter", "nbconvert", "--to", "notebook", "--execute", src,
+         "--output", out, "--ExecutePreprocessor.timeout=600"],
+        capture_output=True, text=True, timeout=900,
+    )
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
 
 
 def test_pybind11_end_to_end(tmp_path):

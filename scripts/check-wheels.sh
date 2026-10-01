@@ -11,7 +11,7 @@
 #   polars>=1.44  jax>=0.11 (cuda13 extra)  jaxlib>=0.11  jax-cuda13-plugin>=0.11
 #   pandas>=3.0  cupy-cuda13x>=14 (dedicated CUDA 13 distribution, not an extra)
 #   jupyterlab>=4.6  notebook>=7.6  streamlit>=1.64  altair>=6.3
-#   seaborn>=0.13  matplotlib>=3.11 (universal wheels)
+#   seaborn>=0.13  matplotlib>=3.11 (universal wheels)  ipywidgets>=8.1
 # Since the pins are >= floors, each probe resolves the LATEST PyPI release.
 # torch is special-cased: it comes from the cu130 index, not PyPI.
 set -euo pipefail
@@ -81,7 +81,7 @@ check_torch() {
 }
 
 printf 'Checking cp-wheel availability for Python %s (%s, manylinux x86_64)\n\n' "$PY" "$CP"
-for pkg in numpy pyarrow conan cmake ninja pybind11 pytest clangd polars jax jaxlib jax-cuda13-plugin pandas cupy-cuda13x jupyterlab notebook streamlit altair seaborn matplotlib; do
+for pkg in numpy pyarrow conan cmake ninja pybind11 pytest clangd polars jax jaxlib jax-cuda13-plugin pandas cupy-cuda13x jupyterlab notebook streamlit altair seaborn matplotlib ipywidgets; do
     check_pypi "$pkg" || FAILS=$((FAILS + 1))
 done
 check_torch || FAILS=$((FAILS + 1))

@@ -178,6 +178,7 @@ def test_gpu_showcase_notebook_executes(tmp_path):
     src = os.path.join(os.path.dirname(__file__), "..", "notebooks", "gpu_showcase.ipynb")
     r = subprocess.run(
         ["jupyter", "nbconvert", "--to", "notebook", "--execute", src,
+         "--output-dir", str(tmp_path),
          "--output", "executed", "--ExecutePreprocessor.timeout=600"],
         capture_output=True, text=True, timeout=900, cwd=str(tmp_path),
     )

@@ -15,3 +15,4 @@ gdb/valgrind lost in devcontainer->Containerfile.base unification; placed in age
 - viz stack (altair 6/seaborn/matplotlib) joins the app layer; floors refreshed to Oct-2026 latests (conan 2.33, jupyterlab 4.6, notebook 7.6); seaborn 0.13.2 is still latest — pandas-3 compat validated empirically by the CI verify test.
 - gpu_showcase.ipynb pattern: interact callbacks invoked once with defaults so headless nbconvert produces real output; GPU guarded with CPU fallback labels.
 - nbconvert --output must be a bare filename (use cwd=); containerized notebook tests need their notebook dir mounted too.
+nbconvert output placement: default output-dir = SOURCE notebook's dir, not cwd — always pass --output-dir explicitly.

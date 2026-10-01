@@ -46,9 +46,11 @@ ENV CXXFLAGS=""
 FROM toolchain AS python-stack
 
 ARG TORCH_CUDA_INDEX=cu130
-RUN pip3 install --no-cache-dir "numpy>=2.5" && \
+RUN pip3 install --no-cache-dir "numpy>=2.5" "polars[pyarrow]>=1.44" && \
     pip3 install --no-cache-dir torch \
         --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_INDEX}"
+
+RUN pip3 install --no-cache-dir "jax[cuda13]>=0.11"
 
 RUN pip3 install --no-cache-dir \
     "conan>=2.32" "cmake>=4.4" "ninja>=1.13" \

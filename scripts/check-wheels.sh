@@ -8,6 +8,7 @@
 # Dep floors mirror Containerfile.base — keep in sync with Containerfile.base pins:
 #   numpy>=2.5  conan>=2.32  cmake>=4.4  ninja>=1.13  pybind11>=3.1
 #   pyarrow>=25  pytest>=9  clangd>=22  torch (cu130 index)
+#   polars>=1.44  jax>=0.11 (cuda13 extra)  jaxlib>=0.11  jax-cuda13-plugin>=0.11
 # Since the pins are >= floors, each probe resolves the LATEST PyPI release.
 # torch is special-cased: it comes from the cu130 index, not PyPI.
 set -euo pipefail
@@ -77,7 +78,7 @@ check_torch() {
 }
 
 printf 'Checking cp-wheel availability for Python %s (%s, manylinux x86_64)\n\n' "$PY" "$CP"
-for pkg in numpy pyarrow conan cmake ninja pybind11 pytest clangd; do
+for pkg in numpy pyarrow conan cmake ninja pybind11 pytest clangd polars jax jaxlib jax-cuda13-plugin; do
     check_pypi "$pkg" || FAILS=$((FAILS + 1))
 done
 check_torch || FAILS=$((FAILS + 1))

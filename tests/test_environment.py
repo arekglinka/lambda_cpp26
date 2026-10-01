@@ -97,6 +97,25 @@ def test_numpy():
     assert_min(numpy.__version__, (2, 5), "numpy")
 
 
+def test_polars():
+    import polars as pl
+
+    assert_min(pl.__version__, (1, 44), "polars")
+    df = pl.DataFrame({"a": [1, 2, 3]})
+    assert df.select(pl.col("a").sum()).item() == 6
+
+
+def test_jax():
+    import jax
+    import jax.numpy as jnp
+
+    assert_min(jax.__version__, (0, 11), "jax")
+    x = jnp.arange(4.0)
+    assert float((x * 2).sum()) == 12.0
+    devices = jax.devices()
+    assert devices, "no jax devices at all (not even CPU)"
+
+
 def test_pybind11_end_to_end(tmp_path):
     inc = run([sys.executable, "-m", "pybind11", "--includes"])
     assert inc.returncode == 0, inc.stderr

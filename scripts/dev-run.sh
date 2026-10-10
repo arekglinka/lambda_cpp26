@@ -81,8 +81,12 @@ container_state() {
 }
 
 gpu_flags() {
-    # Mirrors devcontainer.json runArgs. No /dev/dxg → skip BOTH flags
-    # gracefully (CPU-only mode); never fail the container over them.
+    # Mirrors devcontainer.json runArgs. GPU resolution order:
+    #   1. WSL2:  /dev/dxg (+ read-only /usr/lib/wsl mount)
+    #   2. Native Linux: NVIDIA CDI spec (generate with:
+    #      sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml)
+    #      → --device nvidia.com/gpu=<id> per spec device
+    #   3. Neither → CPU-only. Never fail the container over GPU flags.
     GPU_FLAGS=()
     if [[ -e /dev/dxg ]]; then
         GPU_FLAGS+=(--device=/dev/dxg)
@@ -92,8 +96,22 @@ gpu_flags() {
             warn "/usr/lib/wsl missing — passing GPU device without WSL driver libs."
         fi
         ok "GPU passthrough flags enabled (/dev/dxg)."
+    elif compgen -G "/etc/cdi/nvidia*.yaml" >/dev/null 2>&1 || \
+         compgen -G "/var/run/cdi/nvidia*.yaml" >/dev/null 2>&1; then
+        # podman 4.x CDI quirks: no '=all' qualifier support and CDI parser
+        # rejects 0.7.0-only fields — enumerate device names from the spec
+        # and pass each individually ('all' is a pseudo-device, skip it).
+        local spec names n
+        spec="$(compgen -G "/etc/cdi/nvidia*.yaml" 2>/dev/null | head -1 || true)"
+        [[ -z "$spec" ]] && spec="$(compgen -G "/var/run/cdi/nvidia*.yaml" 2>/dev/null | head -1 || true)"
+        names="$(awk "/^devices:/{f=1;next} /^[a-zA-Z]/{f=0} f && /- name:/ {n=\$NF; gsub(/['\\\" ]/,\"\",n); print n}" "$spec")"
+        for n in $names; do
+            [[ "$n" == "all" ]] && continue
+            GPU_FLAGS+=(--device "nvidia.com/gpu=$n")
+        done
+        ok "GPU passthrough via NVIDIA CDI spec ($spec)."
     else
-        warn "/dev/dxg absent — CPU-only mode (skipping GPU device + /usr/lib/wsl mount)."
+        warn "No GPU path (/dev/dxg absent, no CDI spec in /etc/cdi|/var/run/cdi) — CPU-only mode."
     fi
 }
 

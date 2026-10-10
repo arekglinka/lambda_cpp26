@@ -48,7 +48,7 @@ echo ""
 
 command -v conan >/dev/null                 || die "conan not on PATH."
 command -v cmake >/dev/null                 || die "cmake not on PATH."
-command -v python3.12 >/dev/null            || die "python3.12 not on PATH."
+command -v python3 >/dev/null                || die "python3 not on PATH."
 
 ok "Environment: $(awk -F= '/^NAME/{print $2}' /etc/os-release 2>/dev/null || echo unknown), "\
    "GCC $(/opt/gcc16/bin/g++ -dumpversion), conan $(conan --version | awk '{print $3}'), "\
@@ -108,7 +108,7 @@ if [[ "$SKIP_TESTS" == "1" ]]; then
     warn "SKIP_TESTS=1 — skipping pytest smoke"
 else
     log "Running pytest suite as smoke test..."
-    PYTHONPATH="$(pwd)/build/Release:$(pwd)" python3.12 -m pytest tests/ -q
+    PYTHONPATH="$(pwd)/build/Release:$(pwd)" python3 -m pytest tests/ -q
     ok "All tests passed"
 fi
 
